@@ -133,8 +133,15 @@ The `attack` scenario tests seven routes and reports each one: open the
 actuator, open v1's region, open the evidence, write its own inputs, signal
 v1, raise its priority above v1's, move onto v1's CPU. As an unprivileged
 user the first six are blocked. Moving CPUs is allowed but contained: v1 and
-the car out-rank anything v2 can reach. The attack then burns v1's CPU for
-30 s at v2's highest priority, and v1's deadline misses are counted.
+the car out-rank anything v2 can reach. The attack then burns v1's CPU at
+v2's highest priority; `bbw_guard`, reading v2's CPU-time clock from
+outside, stops it once it goes over its budget (40% of a CPU over a second),
+and v1's deadline misses are counted.
+
+The candidate is started by `bbw_runas`, a small trusted launcher that drops
+to the unprivileged user and then becomes the candidate, so the process the
+tests stop, signal and budget is really the candidate (QNX's `on -u` starts
+it as a child process instead).
 
 ## What the disagreement labels mean
 
@@ -156,7 +163,21 @@ caught, and a v1 that breaks a limit makes the evidence INVALID).
 | `shadow_missing` | | No valid answer for this frame (none, late, or nonsense) |
 
 Hard limits count from a single 10 ms frame. Soft limits are recorded every
-frame and count as an episode once they last 50 ms.
+frame and count as an episode once they last 50 ms. "Soft" means
+"non-immediate but release-relevant", not harmless:
+
+| Check | Counts from | Why | If broken |
+|---|---|---|---|
+| Rear grip (`rear_lock_risk`) | 1 frame | Tyre adhesion is lost at once; one frame can start a lock | FAIL |
+| Braking demand (`demand_not_met`) | 1 frame | The driver gets less braking than asked, right now | FAIL |
+| Motor heat (`over_motor`) | 50 ms | Damage and derating build up with time and repetition | FAIL once it lasts 50 ms (every frame is still recorded) |
+| Battery charge (`over_battery`) | 50 ms | Battery stress depends on current, temperature and time | FAIL once it lasts 50 ms |
+| Lap energy (`over_lap_cap`) | 50 ms | A rules or operating limit, not an immediate hazard | FAIL once it lasts 50 ms |
+
+The 50 ms is a reporting rule to ignore single-frame rounding noise on slow
+quantities, not a claim that 40 ms of overcharge is safe. A better next step
+for heat and battery is to flag a candidate when the *predicted* state would
+cross a limit within a horizon.
 
 ## Where QNX matters
 

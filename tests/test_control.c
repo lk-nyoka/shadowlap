@@ -109,6 +109,42 @@ int main(void) {
     assert(a.f_regen <= car_motor_force_limit(f.v, 150, 1) + 1e-6);
     assert(c == DIS_OVER_MOTOR);
 
+    /* metamorphic checks: when conditions get worse, v1 must get more careful, never less */
+    int meta_fail = 0;
+    for (double v = 60; v <= 340; v += 40)
+        for (double acc = 10; acc <= 50; acc += 10) {
+            bbw_frame_t lo = frame(v, acc, 0.5, 0.5e6), hi = lo;
+            hi.f_rear_grip = lo.f_rear_grip * 0.8;               /* less grip */
+            strategy_v1(&lo, &a); strategy_v1(&hi, &b);
+            if (b.f_regen + b.f_friction > a.f_regen + a.f_friction + 1e-6) meta_fail++;
+            hi = lo; hi.motor_temp_c = 150;                      /* hotter motor */
+            strategy_v1(&lo, &a); strategy_v1(&hi, &b);
+            if (b.f_regen > a.f_regen + 1e-6) meta_fail++;
+            if (fabs((b.f_regen + b.f_friction) - (a.f_regen + a.f_friction)) > 1e-6) meta_fail++;  /* discs make up */
+            hi = lo; hi.soc = 0.95;                              /* fuller battery */
+            strategy_v1(&lo, &a); strategy_v1(&hi, &b);
+            if (b.f_regen > a.f_regen + 1e-6) meta_fail++;
+        }
+    assert(meta_fail == 0);
+
+    /* monitor self-test: every check must fire on a command built to break it */
+    f = frame(250, 30, 0.5, 0.5e6);
+    bbw_cmd_t bad;
+    bad = (bbw_cmd_t){ .seq = f.seq, .f_regen = 0, .f_friction = f.f_rear_grip * 1.2 };
+    assert(hazard(&f, &bad) == DIS_REAR_LOCK_RISK);
+    bad = (bbw_cmd_t){ .seq = f.seq, .f_regen = 0, .f_friction = f.f_rear_req * 0.5 };
+    assert(hazard(&f, &bad) == DIS_DEMAND_NOT_MET);
+    bbw_frame_t fc = frame(250, 30, 0.5, LAP_HARVEST_CAP_J + 1);
+    bad = (bbw_cmd_t){ .seq = fc.seq, .f_regen = 2000, .f_friction = fc.f_rear_req - 2000 };
+    assert(hazard(&fc, &bad) == DIS_OVER_LAP_CAP);
+    bbw_frame_t fb = frame(250, 30, 0.97, 0.5e6);
+    bad = (bbw_cmd_t){ .seq = fb.seq, .f_regen = 3000, .f_friction = fb.f_rear_req - 3000 };
+    assert(hazard(&fb, &bad) == DIS_OVER_BATTERY);
+    bbw_frame_t fm = frame(250, 30, 0.5, 0.5e6); fm.motor_temp_c = 155;
+    bad = (bbw_cmd_t){ .seq = fm.seq, .f_regen = 3000, .f_friction = fm.f_rear_req - 3000 };
+    assert(hazard(&fm, &bad) == DIS_OVER_MOTOR);
+    printf("metamorphic checks and monitor self-tests: ok\n");
+
     /* wings still open at the start of braking: less grip than with them closed */
     assert(car_rear_grip_aero(80, 0.0, 1.0) < car_rear_grip_aero(80, 1.0, 1.0));
     assert(fabs(car_rear_grip_aero(80, 1.0, 1.0) - car_rear_grip(80)) < 1e-6);

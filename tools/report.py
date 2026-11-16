@@ -309,6 +309,40 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:#f1efe8;
 """
 
 
+def scope_section(outdir, summaries):
+    """What this evidence does and does not show: shown first, so a pass is never over-read."""
+    rows = []
+    for sub in sorted(os.listdir(outdir)) if os.path.isdir(outdir) else []:
+        mp = os.path.join(outdir, sub, "manifest.json")
+        if os.path.exists(mp):
+            try:
+                m = json.load(open(mp))
+            except ValueError:
+                continue
+            rows.append(f"<tr><td>{html.escape(str(m.get('candidate')))}</td><td><b>{html.escape(str(m.get('verdict')))}</b></td>"
+                        f"<td>{html.escape(str(m.get('mode')))}</td><td>{html.escape(os.path.basename(str(m.get('lap_file'))))}</td>"
+                        f"<td>{html.escape(str(m.get('seed')))}</td><td><code>{html.escape(str(m.get('lap_sha256'))[:12])}</code></td>"
+                        f"<td><code>{html.escape(str(m.get('git_commit'))[:10])}</code></td></tr>")
+    rt = [n for n, s in summaries.items() if s.get("realtime") and not all(s["realtime"].values())]
+    out = ["<h2>Scope of this evidence</h2><div class='note'>"
+           "<p><b>PASS_WITHIN_SCOPE</b> means: no configured hard or soft limit was broken, using the lap, seed, "
+           "condition ranges, car model and checks recorded in the manifest. It does <b>not</b> show production "
+           "safety, ISO 26262 compliance or fitness for road use. The next evidence would be blind fault injection, "
+           "hardware-in-the-loop tests, independent model validation and a supervised vehicle test.</p>"
+           "<p><b>Not covered:</b> yaw and stability, left/right asymmetry, ABS/ESC interaction, actuator rate limits, "
+           "sensor faults, wet or icy surfaces, the car's speed responding to the candidate's braking. "
+           "<b>Platform:</b> QNX SDP 8.0 in QEMU (a VM on a laptop), not QNX OS for Safety on target hardware. "
+           "The limit checks are project-defined rules, not certified safety mechanisms.</p>"]
+    if rt:
+        out.append(f"<p><b>Timing caveat:</b> real-time scheduling was not in force for: {html.escape(', '.join(rt))}. "
+                   "Treat their timing as indicative only.</p>")
+    if rows:
+        out.append("<table><tr><th>Candidate</th><th>Verdict</th><th>Mode</th><th>Lap</th><th>Seed</th>"
+                   "<th>Lap SHA-256</th><th>Commit</th></tr>" + "".join(rows) + "</table>")
+    out.append("</div>")
+    return "".join(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("outdir", nargs="?", default="out")
@@ -326,8 +360,9 @@ def main():
 
     parts = [f"<!doctype html><html><head><meta charset='utf-8'><title>Shadow lap report</title>"
              f"<style>{CSS}</style></head><body><main>"]
-    parts.append("<h1>Shadow lap report</h1><p class='sub'>Brake-by-wire controller v2 shadow-tested "
-                 "against v1 on a replayed lap. v1 is in charge; v2 only proposes.</p>")
+    parts.append("<h1>Shadow lap report</h1><p class='sub'>A candidate brake-blending controller shadow-tested "
+                 "against v1 on a replayed lap. v1 is in charge; the candidate only proposes.</p>")
+    parts.append(scope_section(a.outdir, summaries))
 
     # ---- headline table ----
     parts.append("<h2>Did v1 stay safe in every scenario?</h2><table><tr><th>Scenario</th><th>What happened</th>"
@@ -352,14 +387,15 @@ def main():
     parts.append("</table>")
     attack_log = os.path.join(a.outdir, "attack", "v2.log")
     if os.path.exists(attack_log):
-        lines = [l.strip() for l in open(attack_log) if "ATTACK" in l]
+        lines = [l.strip() for l in open(attack_log) if "ATTACK" in l or "note:" in l]
+        glog = os.path.join(a.outdir, "attack", "guard.log")
+        if os.path.exists(glog):
+            lines += [l.strip() for l in open(glog) if "BUDGET" in l or "within budget" in l]
         if lines:
-            parts.append(f"<p><b>Attack result:</b> <code>{html.escape(lines[0])}</code></p>")
-            if "NOT BLOCKED" in lines[0]:
-                parts.append("<p>On this system nothing stopped the shadow from writing to the brakes. "
-                             "Any v1 deadline misses in the attack row are the shadow's command "
-                             "overwriting v1's. On QNX, run the attack with <code>V2_USER=qnxuser</code> "
-                             "and with a security policy (docs/security-policy.md); it should be blocked.</p>")
+            parts.append("<p><b>Attack, route by route:</b></p><pre>" + html.escape("\n".join(lines)) + "</pre>")
+            if any("NOT BLOCKED" in l for l in lines):
+                parts.append("<p>At least one route was not blocked on this system. Run the candidate as "
+                             "another user (<code>V2_USER=qnxuser</code> on QNX) and see docs/security-policy.md.</p>")
     parts.append(f"<img src='{timing_chart(runs)}' alt='v1 latency per scenario'>")
 
     # ---- the disagreement story ----
@@ -401,8 +437,9 @@ def main():
                  "(<code>include/control.h</code>), not from a real car.</li>"
                  "<li>The lap supplies speed, throttle and a brake on/off flag. Public lap data is sampled a "
                  "few times per second and is interpolated to 100 Hz.</li>"
-                 "<li>Shadow mode is open-loop: v2 always sees a battery shaped by v1's choices. The report "
-                 "shows what v2 would have asked for in v1's world, not a full lap driven by v2.</li>"
+                 "<li>Shadow mode is open-loop: the candidate sees a battery shaped by v1's choices, and the "
+                 "car's speed follows the recorded lap whatever the controllers decide. The counterfactual "
+                 "sweep lets the candidate drive its own copy of the battery and motor, not the car's motion.</li>"
                  "<li>Timing measured on this machine. Under QEMU, host scheduling adds noise; compare "
                  "scenarios from the same session rather than quoting absolute microseconds.</li>"
                  "</ul></div>")

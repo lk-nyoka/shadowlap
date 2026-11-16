@@ -47,9 +47,11 @@
 #ifdef __QNX__
 #define BBW_PRIO_PLANT     70
 #define BBW_PRIO_V1        65
+#define BBW_PRIO_GUARD     64      /* above any unprivileged process, below v1 */
 #else
 #define BBW_PRIO_PLANT     50
 #define BBW_PRIO_V1        45
+#define BBW_PRIO_GUARD     40
 #endif
 #define BBW_PRIO_COMPARER  20
 #define BBW_PRIO_V2        10

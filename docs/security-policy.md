@@ -7,9 +7,12 @@ moving onto v1's CPU). Fix applied: on QNX the car runs at 70 and v1 at 65,
 in the privileged band (64 and up need `PROCMGR_AID_PRIORITY`; unprivileged
 processes reach at most 63), so v2 can no longer out-rank them. Re-run on
 QNX: six routes blocked, v2 reaches at most priority 63, and with v2 burning
-v1's CPU at 63 for 30 s v1 had 0 deadline misses in 8,914 frames. The stronger next step is a CPU budget for the shadow side with
-**adaptive partitioning**, and a security policy that denies the shadow type
-abilities it does not need.
+v1's CPU at 63 for 30 s v1 had 0 deadline misses in 8,914 frames.
+
+CPU budget: QNX SDP 8.0 discontinued adaptive partitioning. `bbw_guard`
+budgets the candidate instead by reading its CPU-time clock from outside, at
+priority 64, and stopping it when it goes over. A security policy that denies
+the shadow type abilities it does not need is the next layer.
 
 File permissions already keep v2 out when it runs as another user
 (`V2_USER=qnxuser`). A QNX security policy is stronger: it works by

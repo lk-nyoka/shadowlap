@@ -14,28 +14,32 @@ stopped, flooding its CPU, attacking the brakes) made v1 miss a deadline.
 The output is evidence: every moment the candidate broke a limit or
 disagreed, why, how serious it was, and a verdict that fails closed.
 
-Shadow-mode testing of vehicle software is established practice (Bosch, for
-example, holds US patent 12,386,724 on running a released and an updated
-software version side by side and comparing them). What Shadow Lap adds is an
-open, QNX-native reference implementation for **brake blending**, with
-OS-enforced isolation that is tested route by route, safety checks that are
-absolute rather than only relative to v1, and a release-evidence gate that
-treats missing evidence as a failure.
+**Shadow mode is not new.** Running old and new vehicle software side by
+side and comparing them is described in patents such as Bosch US 12,386,724
+and Hitachi Astemo US 12,536,094 (which also covers running the new version
+on a different processor). Brake test benches and brake HIL rigs exist too
+(dSPACE, Vector). What Shadow Lap offers is an **open, QNX-based reference
+implementation for brake blending** that tests its own containment: a
+hostile candidate is attacked against the trusted side route by route and
+the results are measured, the limit checks are absolute, and the evidence
+gate fails closed. It is meant to sit alongside existing HIL tools, not
+replace them.
 
 > Entry for the QNX Global Hackathon 2026, category **Automotive & Mobility**.
 
 ## Why: braking software updates go wrong
 
-In 2025 Volvo recalled about 14,000 US plug-in hybrids and EVs after Brake
-Control Module software version 3.5.14, installed at dealers, could lose
-braking after coasting downhill for about 100 seconds in "B" mode or One
-Pedal Drive (NHTSA recall 25V392). That is a blending failure: regenerative
-braking is unavailable, and the braking the driver expects does not arrive.
+In 2025 Volvo recalled more than 11,000 US plug-in hybrids and EVs (NHTSA
+recall 25V392): with Brake Control Module software 3.5.14, braking could be
+lost after about 100 seconds of coasting downhill in "B" mode or One Pedal
+Drive.
 
-Shadow Lap's third candidate, **v3**, has a flaw of that kind on purpose: when
-the motor is not allowed to take its share (battery nearly full, or the lap's
-energy limit used up), it does not make up the difference with the discs. The
-`demand_not_met` check catches it.
+Shadow Lap's third candidate, **v3**, is a *Volvo-inspired* example of that
+class of failure, written on purpose: when motor braking is unavailable
+(battery nearly full, or the lap's energy limit used up), it does not hand the
+full demand to the friction brakes. The `demand_not_met` check catches it.
+v3 does not reproduce Volvo's actual defect, its 100-second trigger or its
+controller; we do not claim Shadow Lap would have caught that recall.
 
 ## What it looks like
 
@@ -118,11 +122,12 @@ than 2 ms late (QNX here runs inside a VM on Windows, which can still pause it).
 | shadow | 0 | 0 | 168 µs | 1.22 ms |
 | v2 crashes | 0 | 0 | 209 µs | 0.62 ms |
 | v2 hangs 2 s | 0 | 0 | 160 µs | 0.59 ms |
-| v2 stopped from outside 2 s (SIGSTOP) | 0 | 0 | 166 µs | 0.46 ms |
+| v2 stopped from outside 2 s (SIGSTOP)* | 0 | 0 | 166 µs | 0.46 ms |
 | CPU flood on the shadow side | 0 | 4 | 99 µs | 3.11 ms |
 | hostile v2 (7 routes, then burns v1's CPU for 30 s at priority 63) | 0 | 5 | 187 µs | 0.60 ms |
 
 Every scenario: 0 actuator commands rejected, 0 records dropped, 0 clamps.
+\* This run paused the launcher, not v2 (see below); to be re-run.
 The earlier version (15 November, Track A, v1 at priority 45) also gave 0
 misses in all seven; one first shadow run then gave 2 misses with 337 host
 stalls, which we read as the Windows host being busy.
@@ -139,6 +144,22 @@ ability. The car (70) and v1 (65) now sit in that privileged band on QNX, so
 v2 tops out at 63, below both, whatever it does. The attack now also proves
 it: v2 climbs to the highest priority it can reach, moves onto v1's CPU and
 burns it for 30 seconds while the lap runs.
+
+**A CPU budget for the candidate.** Priority alone means v2 could still hog a
+core below 64. QNX 8.0 discontinued adaptive partitioning, so `bbw_guard`
+uses what QNX 8.0 offers instead: it reads the candidate's CPU-time clock
+from outside every 50 ms, at priority 64 (above anything v2 can reach), and
+stops the candidate if it uses more than 40% of a CPU over a second. On
+Linux the hostile v2 was stopped about a second into its CPU burn (98% of a
+CPU), with 0 v1 misses. The QNX re-run of this is next.
+
+**A test that was not testing what it said.** QNX's `on -u` (and Linux's
+`runuser`) start the candidate as a *child* process, so the script's process
+ID was the launcher's. The old SIGSTOP scenario therefore paused the
+launcher, not v2. `bbw_runas` now drops to the unprivileged user and then
+*becomes* v2 (same process ID). On Linux the corrected scenario really pauses
+v2 (99 answers missing, recorded as gaps; 0 v1 misses). **The QNX SIGSTOP
+row below predates this fix and needs re-running.**
 
 **Re-run on QNX with the fix (16 November):**
 
@@ -242,8 +263,9 @@ hashes, seed, ranges, git commit. `python3 tests/test_gate.py` feeds it 18
 broken, incomplete and unsafe summaries to prove it fails closed.
 
 GitHub runs all of this on every push (`.github/workflows/shadow-gate.yml`)
-and requires v2 and v3 to FAIL and v2.1 to pass, so CI also proves the gate
-can reject a bad candidate.
+and requires v2 and v3 to FAIL and v2.1 to get PASS_WITHIN_SCOPE under the
+pinned campaign (seed 1, 300 laps of Track A), so CI also proves the gate can
+reject a bad candidate.
 
 Run the live system with another candidate or different conditions:
 `CANDIDATE=v3 sh scripts/run_demo.sh shadow out` or
@@ -311,6 +333,8 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
 | `src/v1.c`, `src/v2.c` | the two controllers; v2 has built-in fault injection |
 | `src/comparer.c` | joins v1/v2 per frame, writes the evidence |
 | `src/hog.c` | CPU burner for the flood test |
+| `src/guard.c` | `bbw_guard`: outside CPU budget for the candidate (reads its CPU-time clock) |
+| `src/runas.c` | `bbw_runas`: trusted launcher that drops to the candidate's user and becomes it |
 | `scripts/run_demo.sh` | the seven scenarios (attack = seven routes, each reported) |
 | `tools/` | live dashboard, real-lap import (`fetch_openf1_lap.py`), lap from video (`lapgen.py`), synthetic lap, FastF1 import, HTML report, AI analyst, QNX live link |
 | `tests/` | ring stress tests (including torn-read checks), strategy and limit-check tests, the gate's fail-closed tests |
@@ -337,10 +361,13 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
   here is ISO 26262 certified. Verified in QEMU: the actuator resource
   manager, real-time priorities, CPU pinning, v2 as another user. Not yet
   run: the security-policy steps and real hardware (Raspberry Pi).
-- **Priority band, not a CPU budget.** v2 can still use up to 63 and move onto
-  v1's CPU. v1 and the car out-rank it, but lower-priority system services on
-  that core could be slowed. A CPU budget for the shadow (QNX adaptive
-  partitioning) is the stronger next step.
+- **The CPU budget is a watchdog, not a scheduler guarantee.** QNX 8.0 has
+  no adaptive partitioning; `bbw_guard` stops an over-budget candidate within
+  about a second, so for that second it can still slow services below
+  priority 64 on its core. Lowering the unprivileged ceiling (`procnto -P`)
+  is a further option.
+- **Nested virtualisation.** QNX runs in QEMU inside WSL2 (itself a Hyper-V
+  VM) on Windows, so timing includes two layers of host scheduling.
 - **Shadow mode is not new.** The contribution is the QNX implementation, the
   isolation tests, the absolute checks and the fail-closed gate.
 - **Data licence.** OpenF1 is unofficial and for non-commercial use; the lap

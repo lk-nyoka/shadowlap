@@ -24,7 +24,7 @@ else
 endif
 
 COMMON = src/common.c src/actuator.c src/control.c src/vehicle.c
-BINS   = bbw_plant bbw_v1 bbw_v2 bbw_comparer bbw_hog bbw_sweep
+BINS   = bbw_plant bbw_v1 bbw_v2 bbw_comparer bbw_hog bbw_sweep bbw_guard bbw_runas
 OUT    = $(addprefix $(BUILD)/,$(BINS))
 
 all: $(OUT)
@@ -39,6 +39,12 @@ $(BUILD)/bbw_comparer: src/comparer.c $(COMMON) include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ src/comparer.c $(COMMON) $(LDLIBS)
 $(BUILD)/bbw_hog:      src/hog.c      $(COMMON) include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ src/hog.c $(COMMON) $(LDLIBS)
+
+$(BUILD)/bbw_guard:    src/guard.c    $(COMMON) include/*.h | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ src/guard.c $(COMMON) $(LDLIBS)
+
+$(BUILD)/bbw_runas:    src/runas.c | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ src/runas.c
 
 $(BUILD)/bbw_sweep:    src/sweep.c    $(COMMON) include/*.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ src/sweep.c $(COMMON) $(LDLIBS)
