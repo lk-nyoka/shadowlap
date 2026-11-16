@@ -1,6 +1,5 @@
 build/
-out/
-out-*/
+out*/
 .venv/
 __pycache__/
 data/lap_real*.csv

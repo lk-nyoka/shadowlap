@@ -1,8 +1,0 @@
-{
-  "cycles": 9016,
-  "v1_deadline_misses": 48,
-  "v1_clamped": 0,
-  "v1_latency_us": {"p50": 354.2, "p99": 991.3, "p999": 2852.3, "max": 5745.0},
-  "shadow_frames_dropped": 0,
-  "classes": {"agree": 8017, "within_limits": 253, "over_battery": 290, "over_lap_cap": 117, "rear_lock_risk": 339, "shadow_missing": 0}
-}
