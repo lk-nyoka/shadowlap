@@ -88,6 +88,7 @@ run_one() {
     s=$1
     out=$OUTROOT/$s
     mkdir -p "$out"
+    rm -f "$out/events.log"                # start each run's event log fresh
     echo "=== scenario: $s  ->  $out"
     PIDS=""
 

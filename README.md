@@ -103,33 +103,31 @@ limits either way.
 
 ### Results on QNX 8.0
 
-**These timing results were measured on 15 November, before the isolation
-and gate changes of 16 November. They are being re-run on the current code;
-until then treat them as the previous version's results.**
-
-Full laps, 9,016 frames each, QNX SDP 8.0 in QEMU (2 CPUs) on a Windows 11
-laptop. v1 and the car pinned to CPU 0, v2 to CPU 1, v2 running as an
-unprivileged user (`V2_USER=qnxuser`).
+Measured 16 November on the current code. Real Monza lap (7,933 frames, one
+every 10 ms), hot day with worn tyres (grip 90%, 42 °C, battery 88%), QNX SDP
+8.0 in QEMU (2 CPUs) on a Windows 11 laptop. The car and v1 pinned to CPU 0
+at priorities 70 and 65; v2 on CPU 1 as the unprivileged user `qnxuser`.
 
 A **v1 miss** means v1 had its full 8 ms after receiving a frame and still
 didn't answer. A **host stall** means the simulated car itself was woken more
-than 2 ms late (QNX here runs inside a VM on Windows, which still pauses it).
+than 2 ms late (QNX here runs inside a VM on Windows, which can still pause it).
 
 | Scenario | v1 misses | Host stalls | v1 p99 | v1 worst |
 |---|---|---|---|---|
-| baseline (no shadow) | 0 | 58 | 237 µs | 1.13 ms |
-| shadow | 0 | 48 | 597 µs | 1.96 ms |
-| v2 crashes | 0 | 26 | 347 µs | 1.77 ms |
-| v2 hangs 2 s | 0 | 53 | 615 µs | 2.10 ms |
-| v2 SIGSTOPped 2 s | 0 | 15 | 544 µs | 1.23 ms |
-| CPU flood on shadow side | 0 | 13 | 185 µs | 0.88 ms |
-| v2 attacks the actuator | 0 | 7 | 246 µs | 1.56 ms |
+| baseline (no shadow) | 0 | 27 | 207 µs | 0.67 ms |
+| shadow | 0 | 0 | 168 µs | 1.22 ms |
+| v2 crashes | 0 | 0 | 209 µs | 0.62 ms |
+| v2 hangs 2 s | 0 | 0 | 160 µs | 0.59 ms |
+| v2 stopped from outside 2 s (SIGSTOP) | 0 | 0 | 166 µs | 0.46 ms |
+| CPU flood on the shadow side | 0 | 4 | 99 µs | 3.11 ms |
+| hostile v2 (7 routes, then burns v1's CPU for 30 s at priority 63) | 0 | 5 | 187 µs | 0.60 ms |
 
-The first shadow run gave 2 v1 misses with 337 host stalls, far more stalls
-than any other run; a rerun gave the row above. We read the first as the
-Windows host being busy, and keep both in the record.
+Every scenario: 0 actuator commands rejected, 0 records dropped, 0 clamps.
+The earlier version (15 November, Track A, v1 at priority 45) also gave 0
+misses in all seven; one first shadow run then gave 2 misses with 337 host
+stalls, which we read as the Windows host being busy.
 
-**The attack test (current code, run on QNX 16 November).** A hostile v2,
+**The attack test, and the weakness it found.** A hostile v2,
 running as `qnxuser`, tries seven routes and reports each. QNX blocked five:
 the brake actuator, v1's memory, the evidence, writing its own inputs, and
 signalling v1. Two were open: v2 could raise its priority above v1's (then
