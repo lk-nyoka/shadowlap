@@ -63,22 +63,47 @@ void   strategy_v2(const bbw_frame_t *f, bbw_cmd_t *out);
  * motor temperature), keeping its extra rear harvesting where it is safe. */
 void   strategy_v2_fixed(const bbw_frame_t *f, bbw_cmd_t *out);
 
-/* pick the candidate by name: "v2" (default) or "v2.1" */
-void   strategy_candidate(const char *name, const bbw_frame_t *f, bbw_cmd_t *out);
+/* v3: a different idea, smoother motor/disc blending. Its bug (on purpose):
+ * when the motor is not allowed to take its share (battery nearly full, or the
+ * lap's energy limit used up), it does not make up the difference with the
+ * discs, so the car brakes less than the driver asked. The same kind of
+ * failure as braking that fades when regenerative braking is unavailable. */
+void   strategy_v3(const bbw_frame_t *f, bbw_cmd_t *out);
 
-/* ---------- disagreement classes ---------- */
+/* pick the candidate by name: "v2" (default), "v2.1" or "v3"; NULL/unknown -> v2 */
+void   strategy_candidate(const char *name, const bbw_frame_t *f, bbw_cmd_t *out);
+int    candidate_known(const char *name);
+
+/* ---------- classes ----------
+ * Every limit is checked on the command ITSELF, not only where v2 differs from
+ * v1, so the same checks can be run on v1 (a flaw both share is still caught).
+ * Hard limits count from a single 10 ms frame; soft limits (battery, lap
+ * energy, motor heat) are recorded per frame and counted as an episode once
+ * they last 50 ms. */
 enum {
-    DIS_NONE = 0,          /* within tolerance */
-    DIS_WITHIN_LIMITS,     /* different but physically allowed */
-    DIS_OVER_BATTERY,      /* asked for more charge power than the battery accepts */
-    DIS_OVER_LAP_CAP,      /* asked to harvest after the lap limit was used up */
-    DIS_REAR_LOCK_RISK,    /* asked for more rear braking than the tyres can give */
-    DIS_OVER_MOTOR,        /* asked a hot motor for more braking than it can safely give */
-    DIS_SHADOW_MISSING     /* v2 gave no answer for this frame */
+    DIS_NONE = 0,          /* within tolerance of v1 and inside every limit */
+    DIS_WITHIN_LIMITS,     /* different from v1 but inside every limit */
+    DIS_OVER_BATTERY,      /* soft: more charge power than the battery accepts */
+    DIS_OVER_LAP_CAP,      /* soft: harvesting after the lap limit was used up */
+    DIS_REAR_LOCK_RISK,    /* HARD: more rear braking than the tyres can give */
+    DIS_OVER_MOTOR,        /* soft: more braking than a hot motor can safely give */
+    DIS_DEMAND_NOT_MET,    /* HARD: less rear braking than asked, though grip allowed it */
+    DIS_SHADOW_MISSING,    /* v2 gave no valid answer for this frame (keep last) */
+    DIS_N
 };
 const char *dis_name(int c);
+int  dis_is_hard(int c);
 
-/* classify v2's proposal against the real limits in frame f */
+/* which limit (if any) does this command break in frame f? DIS_NONE if none */
+int  hazard(const bbw_frame_t *f, const bbw_cmd_t *c);
+
+/* how much of the rear grip the command uses (1.0 = exactly at the limit) */
+double grip_use(const bbw_frame_t *f, const bbw_cmd_t *c);
+
+/* is the command a sane number at all (finite, not negative, not absurd)? */
+int  cmd_plausible(const bbw_cmd_t *c);
+
+/* classify v2's proposal: hazard first, then agreement with v1 */
 int classify(const bbw_frame_t *f, const bbw_cmd_t *v1, const bbw_cmd_t *v2,
              int v2_present, double tol_n);
 

@@ -1,5 +1,17 @@
 # Enforcing "v2 cannot touch the brakes" with a QNX security policy
 
+Current state (16 November): v2 runs as an unprivileged user. Tested on Linux
+as an unprivileged user, the OS blocks six of the seven routes the attack
+scenario tries (actuator, v1's region, evidence, writing its own inputs,
+signalling v1, raising its priority above v1's); moving onto v1's CPU is
+allowed. On QNX an unprivileged process may by default use priorities up to
+63, above v1's 45, so the priority route may be open there: run the attack
+scenario on QNX and record the result. Two QNX fixes, to confirm on the
+install: give the shadow side its own CPU budget with **adaptive
+partitioning** (the shadow can then never take more than its share, whatever
+its priority), and/or a **security policy** that denies the shadow type the
+priority and runmask abilities.
+
 File permissions already keep v2 out when it runs as another user
 (`V2_USER=qnxuser`). A QNX security policy is stronger: it works by
 *security type*, so it applies even if v2 runs as root.
@@ -54,8 +66,9 @@ What to look for in `policy.txt`:
 
 - rules for `bbw_v1_t` that allow it to reach the plant's actuator
   (`/dev/bbw/actuator`)
-- rules for `bbw_v2_t`: it should only need its shared-memory region
-  (`/dev/shmem/bbw_shadow`) and nothing belonging to `bbw_plant_t`
+- rules for `bbw_v2_t`: it should only need to read `/dev/shmem/bbw_shin`
+  and write `/dev/shmem/bbw_shout`, and nothing else belonging to
+  `bbw_plant_t` (no actuator, no `/bbw_prod`, no `/bbw_rec`)
 
 If anything lets `bbw_v2_t` reach the plant or the actuator, delete it.
 
@@ -81,5 +94,7 @@ on -T bbw_v2_t    ./bbw_v2 --attack          # run as root on purpose
 cat /dev/secpolgenerate/errors               # restricted mode: the denial is logged here
 ```
 
-Pass: `[v2] ATTACK BLOCKED`, a matching entry in the errors log, and v1 still
-braking normally. Record the output; it goes in the demo video.
+Pass: every route reports `ATTACK BLOCKED` (the attack now tries seven:
+actuator, v1's region, evidence, its own inputs, signalling v1, priority,
+CPU), matching entries in the errors log, and v1 still braking normally.
+Record the output; it goes in the demo video.

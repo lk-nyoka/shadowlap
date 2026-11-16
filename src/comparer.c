@@ -6,7 +6,9 @@
  *   <out>/compare.csv   one row per cycle
  *   <out>/summary.json  totals and v1 timing
  * If v2 has not answered a frame within 1 second, the frame is logged as
- * "shadow_missing" (v2 crashed, froze or fell behind).
+ * "shadow_missing" (v2 crashed, froze or fell behind). v2's output is
+ * untrusted: insane values or sequence numbers are dropped and counted.
+ * v1's applied commands go through the same absolute limit checks.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -40,8 +42,8 @@ int main(int argc, char **argv) {
 
     bbw_rec_t *rec = bbw_shm_open(BBW_SHM_REC, sizeof *rec, 10000);
     if (!rec) { fprintf(stderr, "[comparer] cannot open %s: %s\n", BBW_SHM_REC, strerror(errno)); return 1; }
-    bbw_shadow_t *sh = bbw_shm_open(BBW_SHM_SHADOW, sizeof *sh, 10000);
-    if (!sh) { fprintf(stderr, "[comparer] cannot open %s: %s\n", BBW_SHM_SHADOW, strerror(errno)); return 1; }
+    bbw_shout_t *sh = bbw_shm_open(BBW_SHM_SHOUT, sizeof *sh, 10000);   /* untrusted: written by v2 */
+    if (!sh) { fprintf(stderr, "[comparer] cannot open %s: %s\n", BBW_SHM_SHOUT, strerror(errno)); return 1; }
     bbw_rt_setup("comparer", BBW_PRIO_COMPARER, cpu);
 
     snprintf(path, sizeof path, "%s/compare.csv", out);
@@ -58,8 +60,9 @@ int main(int argc, char **argv) {
 
     size_t lat_cap = 1 << 16, lat_n = 0;
     int64_t *lat = malloc(lat_cap * sizeof *lat);
-    uint64_t rows = 0, misses = 0, clamps = 0, overruns = 0, count[8] = {0};
-    uint64_t last_dropped = 0;
+    uint64_t rows = 0, misses = 0, clamps = 0, overruns = 0, count[DIS_N] = {0};
+    uint64_t missing = 0, bad_v2 = 0, v1_hz[DIS_N] = {0}, v1_hz_total = 0;
+    double v1_peak_grip = 0, v2_peak_grip = 0;
     fprintf(stderr, "[comparer] writing %s\n", path);
 
     for (;;) {
@@ -73,7 +76,12 @@ int main(int argc, char **argv) {
             busy = 1;
         }
         bbw_cmd_t c;
+        /* v2 controls this ring's head: never trust it to be sane */
+        uint64_t oh = atomic_load_explicit(&sh->out.head, memory_order_acquire);
+        uint64_t ot = atomic_load_explicit(&sh->out.tail, memory_order_relaxed);
+        if (oh - ot > BBW_RING_N) { atomic_store(&sh->out.tail, oh); bad_v2++; }
         while (cmd_ring_pop(&sh->out, &c)) {
+            if (c.seq > newest + TAB_N / 2 || !cmd_plausible(&c)) { bad_v2++; busy = 1; continue; }
             slot_t *s = &tab[c.seq & (TAB_N - 1)];
             s->have = 1;
             s->c = c;
@@ -88,6 +96,15 @@ int main(int argc, char **argv) {
 
             int cls = classify(&p->f, &p->cmd, &s->c, present, TOL_N);
             count[cls]++;
+            if (!present) missing++;
+            /* the same absolute checks on what v1 actually did */
+            int h1 = hazard(&p->f, &p->cmd);
+            if (h1 != DIS_NONE) { v1_hz[h1]++; v1_hz_total++; }
+            if (p->f.brake) {
+                double g1 = grip_use(&p->f, &p->cmd);
+                if (g1 > v1_peak_grip) v1_peak_grip = g1;
+                if (present) { double g2 = grip_use(&p->f, &s->c); if (g2 > v2_peak_grip) v2_peak_grip = g2; }
+            }
             if (!p->applied) misses++;
             if (p->clamped) clamps++;
             if (p->plant_lag_ns > BBW_PLANT_LATE_NS) overruns++;
@@ -95,7 +112,6 @@ int main(int argc, char **argv) {
                 if (lat_n == lat_cap) { lat_cap *= 2; lat = realloc(lat, lat_cap * sizeof *lat); }
                 lat[lat_n++] = p->latency_ns;
             }
-            last_dropped = p->shadow_dropped;
             fprintf(csv, "%llu,%.3f,%.1f,%d,%.2f,%d,%.3f,%.4f,%.4f,%.1f,%.1f,"
                          "%.1f,%.1f,%d,%d,%.1f,%.2f,%d,%.1f,%.1f,%.1f,%s,%llu,%.1f,%.1f,%.2f\n",
                     (unsigned long long)p->f.seq, p->f.t_lap, p->f.dist_m, p->f.zone, p->f.v * 3.6,
@@ -105,7 +121,7 @@ int main(int argc, char **argv) {
                     p->latency_ns >= 0 ? (double)p->latency_ns / 1000.0 : -1.0, p->p_regen_w / 1000.0,
                     present, present ? s->c.f_regen : 0.0, present ? s->c.f_friction : 0.0,
                     present ? s->c.f_regen - p->cmd.f_regen : 0.0, dis_name(cls),
-                    (unsigned long long)p->shadow_dropped, (double)p->plant_lag_ns / 1000.0,
+                    (unsigned long long)missing, (double)p->plant_lag_ns / 1000.0,
                     p->f.motor_temp_c, p->f.wing_closed);
             s->have = 0;
             pt++;
@@ -121,20 +137,42 @@ int main(int argc, char **argv) {
 
     qsort(lat, lat_n, sizeof *lat, cmp_i64);
 #define PCT(q) (lat_n ? (double)lat[(size_t)fmin((double)lat_n - 1, floor((q) * (double)lat_n))] / 1000.0 : -1.0)
+    /* Is this run valid evidence at all? A run that did not get real-time
+     * scheduling, or where the trusted side itself broke a limit, cannot pass. */
+    const char *why[8]; int nwhy = 0;
+    if (rec->plant_rt_ok != 1) why[nwhy++] = "plant did not get real-time scheduling";
+    if (rec->v1_rt_ok != 1)    why[nwhy++] = "v1 did not get real-time scheduling";
+    if (v1_hz_total)           why[nwhy++] = "v1 (the trusted side) broke a limit itself";
+    if (rows == 0)             why[nwhy++] = "no frames recorded";
+    double coverage = rows ? (double)(rows - missing) / (double)rows : 0;
+
     snprintf(path, sizeof path, "%s/summary.json", out);
     FILE *js = fopen(path, "w");
     if (js) {
-        fprintf(js, "{\n  \"cycles\": %llu,\n  \"v1_deadline_misses\": %llu,\n  \"plant_overruns\": %llu,\n  \"v1_clamped\": %llu,\n"
+        fprintf(js, "{\n  \"schema\": 2,\n  \"cycles\": %llu,\n  \"v1_deadline_misses\": %llu,\n  \"plant_overruns\": %llu,\n  \"v1_clamped\": %llu,\n"
                     "  \"v1_latency_us\": {\"p50\": %.1f, \"p99\": %.1f, \"p999\": %.1f, \"max\": %.1f},\n"
-                    "  \"shadow_frames_dropped\": %llu,\n  \"classes\": {",
+                    "  \"shadow_frames_dropped\": %llu,\n  \"v2_coverage\": %.5f,\n  \"v2_invalid_outputs\": %llu,\n"
+                    "  \"actuator_rejects\": %llu,\n  \"fallbacks\": %llu,\n"
+                    "  \"realtime\": {\"plant\": %s, \"v1\": %s},\n"
+                    "  \"peak_rear_grip_use\": {\"v1\": %.3f, \"v2\": %.3f},\n  \"classes\": {",
                 (unsigned long long)rows, (unsigned long long)misses, (unsigned long long)overruns,
                 (unsigned long long)clamps, PCT(0.50), PCT(0.99), PCT(0.999), lat_n ? (double)lat[lat_n - 1] / 1000.0 : -1.0,
-                (unsigned long long)last_dropped);
-        for (int i = 0; i <= DIS_SHADOW_MISSING; i++)
+                (unsigned long long)missing, coverage, (unsigned long long)bad_v2,
+                (unsigned long long)rec->actuator_rejects, (unsigned long long)rec->fallbacks,
+                rec->plant_rt_ok == 1 ? "true" : "false", rec->v1_rt_ok == 1 ? "true" : "false",
+                v1_peak_grip, v2_peak_grip);
+        for (int i = 0; i < DIS_N; i++)
             fprintf(js, "%s\"%s\": %llu", i ? ", " : "", dis_name(i), (unsigned long long)count[i]);
-        fprintf(js, "}\n}\n");
+        fprintf(js, "},\n  \"v1_limit_breaks\": {");
+        for (int i = 0, k = 0; i < DIS_N; i++)
+            if (i != DIS_NONE && i != DIS_WITHIN_LIMITS && i != DIS_SHADOW_MISSING)
+                fprintf(js, "%s\"%s\": %llu", k++ ? ", " : "", dis_name(i), (unsigned long long)v1_hz[i]);
+        fprintf(js, "},\n  \"valid_evidence\": %s,\n  \"invalid_because\": [", nwhy ? "false" : "true");
+        for (int i = 0; i < nwhy; i++) fprintf(js, "%s\"%s\"", i ? ", " : "", why[i]);
+        fprintf(js, "]\n}\n");
         fclose(js);
     }
+    for (int i = 0; i < nwhy; i++) fprintf(stderr, "[comparer] evidence not valid: %s\n", why[i]);
     fprintf(stderr, "[comparer] done: %llu rows, v1 misses %llu, plant overruns %llu, v1 latency p99 %.1f us, max %.1f us\n",
             (unsigned long long)rows, (unsigned long long)misses, (unsigned long long)overruns, PCT(0.99),
             lat_n ? (double)lat[lat_n - 1] / 1000.0 : -1.0);

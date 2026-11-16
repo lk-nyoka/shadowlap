@@ -7,6 +7,18 @@
 #include "bbw.h"
 
 static cmd_ring_t R;
+static bcast_ring_t B;
+static volatile int b_done;
+
+static void *bproducer(void *a) {
+    (void)a;
+    for (uint64_t i = 0; i < 3000000; i++) {
+        bbw_frame_t f = { .seq = i, .t_lap = (double)i * 2.0, .v = (double)i + 0.5 };
+        bcast_publish(&B, &f);
+    }
+    b_done = 1;
+    return NULL;
+}
 
 static void *producer(void *a) {
     (void)a;
@@ -46,7 +58,33 @@ int main(void) {
         }
         if (!prod_done && pthread_tryjoin_np(t, NULL) == 0) prod_done = 1;
     }
-    printf("test_ring: ok (stress received %llu, dropped %llu)\n",
+    printf("test_ring: spsc ok (stress received %llu, dropped %llu)\n",
            (unsigned long long)got, (unsigned long long)atomic_load(&R.dropped));
+
+    /* broadcast ring (plant -> v2, v2 read-only) */
+    static bcast_ring_t b;
+    bbw_frame_t f, g;
+    assert(bcast_read(&b, 0, &g) == 0);                   /* nothing yet */
+    for (uint64_t i = 0; i < 5; i++) { f.seq = i; bcast_publish(&b, &f); }
+    for (uint64_t i = 0; i < 5; i++) { assert(bcast_read(&b, i, &g) == 1 && g.seq == i); }
+    assert(bcast_read(&b, 5, &g) == 0);
+    /* the writer never waits: a slow reader finds old frames gone (-1), not stale data */
+    for (uint64_t i = 5; i < 5 + 2 * BBW_RING_N; i++) { f.seq = i; bcast_publish(&b, &f); }
+    assert(bcast_read(&b, 0, &g) == -1);
+    assert(bcast_read(&b, 5 + BBW_RING_N, &g) == 1 && g.seq == 5 + BBW_RING_N);
+
+    /* stress: a reader racing the writer gets either a whole, correct frame or "lost" */
+    pthread_create(&t, NULL, bproducer, NULL);
+    uint64_t next = 0, okc = 0, lostc = 0;
+    while (!b_done || next < atomic_load(&B.head)) {
+        int r = bcast_read(&B, next, &g);
+        if (r == 1) {
+            assert(g.seq == next && g.t_lap == (double)next * 2.0 && g.v == (double)next + 0.5);
+            okc++; next++;
+        } else if (r == -1) { lostc++; next++; }
+    }
+    pthread_join(t, NULL);
+    printf("test_ring: broadcast ok (read %llu whole frames, %llu reported lost, 0 torn)\n",
+           (unsigned long long)okc, (unsigned long long)lostc);
     return 0;
 }

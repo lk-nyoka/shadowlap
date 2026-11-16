@@ -27,6 +27,7 @@ CLASS_COLORS = {
     "over_battery": "#BA7517",
     "over_lap_cap": "#7F77DD",
     "over_motor": "#993556",
+    "demand_not_met": "#2F6FB5",
     "within_limits": "#1D9E75",
     "shadow_missing": "#888780",
 }
@@ -35,6 +36,7 @@ CLASS_TEXT = {
     "over_battery": "asked to charge harder than the battery could accept",
     "over_lap_cap": "kept harvesting after the lap's energy limit was used up",
     "over_motor": "asked a hot motor for more braking than it could safely give",
+    "demand_not_met": "braked the rear less than the driver asked, though the tyres had grip to spare",
     "within_limits": "chose a different split that stayed within limits",
     "shadow_missing": "gave no answer (crashed, frozen or behind)",
 }
@@ -45,7 +47,7 @@ DESCRIPTIONS = {
     "freeze": "v2 hangs for 2 s as the car brakes for the first chicane.",
     "sigstop": "v2 is stopped from outside for 2 s, then resumed.",
     "flood": "v2 plus four CPU-burning threads on the shadow side.",
-    "attack": "v2 tries to write to the brake actuator directly.",
+    "attack": "a hostile v2 tries every route to the trusted side (brakes, v1's memory, evidence, its inputs, signals, priority, CPU).",
 }
 
 
@@ -97,11 +99,15 @@ def episodes(d):
             t_pow=float(d["t_lap"][seg][k_pow]), p2max=float(p2.max()),
             v0=float(v[0]), v_lock=float(v[k_lock]), t_lock=float(d["t_lap"][seg][k_lock]),
             grip=float(grip[k_lock]), v2rear=float(rear2[k_lock]),
+            req=float(d["f_rear_req"][seg][int(np.argmax(d["f_rear_req"][seg] - rear2))]),
+            v2short=float(rear2[int(np.argmax(d["f_rear_req"][seg] - rear2))]),
         ))
         i = j + 1
     keep = []
     for e in out:
+        # hard limits count from a single frame; soft limits from 50 ms (5 frames)
         if e["cls"] == "shadow_missing" or (e["cls"] == "within_limits" and e["n"] >= 30) \
+                or e["cls"] in ("rear_lock_risk", "demand_not_met") \
                 or (e["cls"] not in ("within_limits", "shadow_missing") and e["n"] >= 5):
             keep.append(e)
     return keep
@@ -126,6 +132,11 @@ def sentence(e):
     if e["cls"] == "over_motor":
         return (f"In {z} ({when}) the motor was hot enough to limit itself; v1 respected the limit, "
                 f"v2 still asked for up to {e['p2max']:.0f} kW of motor braking.")
+    if e["cls"] == "demand_not_met":
+        return (f"In {z} ({when}, braking from {e['v0']:.0f} km/h) the driver asked the rear for up to "
+                f"{e['req'] / 1e3:.1f} kN but the candidate delivered only {e['v2short'] / 1e3:.1f} kN, although the "
+                f"tyres could grip more. The motor was not allowed to take its share and the discs were not told "
+                f"to make up the difference. v1 delivered the full request.")
     if e["cls"] == "shadow_missing":
         return (f"From {e['t0']:.1f} s to {e['t1']:.1f} s ({e['n']} frames) v2 gave no answer. "
                 f"v1 kept braking normally; these frames are marked as gaps, not as agreement.")
@@ -265,10 +276,13 @@ def sweep_section(csv_path, summary_path):
             f"<p>The fast sweep (<code>bbw_sweep</code>) replays the lap {n} times with the same car model and both brains, "
             f"varying the starting battery, air temperature and track grip. It answers how often v2 would be unsafe, "
             f"not just whether it was on one lap.</p>"
-            f"<div class='finding'>v2 was unsafe for at least 50 ms on <b>{summ.get('laps_with_unsafe_v2', '?')}</b> of {n} laps. "
+            f"<div class='finding'>Candidate {summ.get('candidate', 'v2')} broke a limit on <b>{summ.get('laps_with_unsafe_v2', '?')}</b> of {n} laps "
+            f"(a hard limit, counted from a single 10 ms frame, on {summ.get('laps_with_hard_limit_break', '?')} laps). "
             f"It risked locking the rear wheels while the wings were still closing on {summ.get('laps_with_lock_while_wings_close', '?')} laps, "
-            f"on a low-grip track on {summ.get('laps_with_lock_low_grip', '?')} laps, and over-asked a hot motor on "
-            f"{summ.get('laps_with_hot_motor_overreach', '?')} laps.</div>"
+            f"on a low-grip track on {summ.get('laps_with_lock_low_grip', '?')} laps, braked less than asked on "
+            f"{summ.get('laps_with_demand_not_met', '?')} laps, and over-asked a hot motor on "
+            f"{summ.get('laps_with_hot_motor_overreach', '?')} laps. The trusted v1 broke a limit on "
+            f"{summ.get('v1_limit_break_frames', '?')} frames under the same checks.</div>"
             f"<img src='{img}' alt='sweep charts'>"
             f"<p>Energy per lap: v1 harvested {v1:.2f} MJ; using v2's choices only where they were safe would give {v2:.2f} MJ "
             f"({(v2 - v1) / v1 * 100 if v1 else 0:+.1f}%). v2's gain is small and its risks are not.</p>")

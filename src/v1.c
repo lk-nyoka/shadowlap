@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
     if (!prod) { fprintf(stderr, "[v1] cannot open %s: %s\n", BBW_SHM_PROD, strerror(errno)); return 1; }
     int act = bbw_actuator_open();
     if (act < 0) { fprintf(stderr, "[v1] cannot open actuator: %s\n", strerror(errno)); return 1; }
-    bbw_rt_setup("v1", BBW_PRIO_V1, cpu);
+    atomic_store(&prod->v1_rt_ok, bbw_rt_setup("v1", BBW_PRIO_V1, cpu) ? 1 : -1);
     fprintf(stderr, "[v1] running\n");
 
     uint64_t last = UINT64_MAX, handled = 0;

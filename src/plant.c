@@ -3,10 +3,11 @@
  *
  * Every 10 ms:
  *   1. build a frame from the lap replay and the battery state
- *   2. hand it to v1 (production region) and drop a copy on the shadow ring
- *      (never waits for v2)
+ *   2. hand it to v1 (production region) and publish a copy that v2 can only
+ *      read (the plant never waits for, or hears from, v2)
  *   3. at +8 ms, take whatever v1 has sent to the actuator for this frame;
- *      if nothing arrived it is a deadline miss and the discs do all the work
+ *      if nothing arrived it is a deadline miss and the discs take over
+ *      (limited to the rear grip)
  *   4. update the battery, write a record for the comparer
  *
  * Speed comes straight from the lap trace (kinematic replay). The controllers
@@ -54,19 +55,19 @@ int main(int argc, char **argv) {
     }
 
     bbw_prod_t   *prod = bbw_shm_create(BBW_SHM_PROD,   sizeof *prod, 0600);
-    bbw_shadow_t *shad = bbw_shm_create(BBW_SHM_SHADOW, sizeof *shad, 0666);
+    bbw_shin_t   *shin = bbw_shm_create(BBW_SHM_SHIN,   sizeof *shin, 0644);  /* v2: read only */
+    bbw_shout_t  *shout= bbw_shm_create(BBW_SHM_SHOUT,  sizeof *shout, 0666); /* v2 writes here */
     bbw_rec_t    *rec  = bbw_shm_create(BBW_SHM_REC,    sizeof *rec,  0600);
     sem_init(&prod->frame_ready, 1, 0);
-    sem_init(&shad->frame_ready, 1, 0);
     atomic_store(&prod->plant_running, 1);
-    atomic_store(&shad->plant_running, 1);
+    atomic_store(&shin->plant_running, 1);
     atomic_store(&rec->plant_running, 1);
-    prod->magic = shad->magic = rec->magic = BBW_MAGIC;
+    prod->magic = shin->magic = shout->magic = rec->magic = BBW_MAGIC;
 
     /* Set priority BEFORE starting the actuator thread so it inherits it.
      * (Found by the flood test: an actuator thread at normal priority was
      * starved by shadow-side CPU burners, and v1's commands arrived late.) */
-    bbw_rt_setup("plant", BBW_PRIO_PLANT, cpu);
+    int plant_rt = bbw_rt_setup("plant", BBW_PRIO_PLANT, cpu);
     if (bbw_actuator_serve_start() != 0) { fprintf(stderr, "[plant] actuator failed\n"); return 1; }
 
     fprintf(stderr, "[plant] %zu samples (%.1fs lap), %d lap(s); starting in %d ms\n",
@@ -78,7 +79,7 @@ int main(int argc, char **argv) {
 
     vehicle_t car;
     vehicle_init(&car, soc0, ambient, mu);
-    uint64_t misses = 0, clamps = 0, overruns = 0;
+    uint64_t misses = 0, clamps = 0, overruns = 0, fallback_limited = 0;
     int64_t t0 = bbw_now_ns() + BBW_PERIOD_NS;
 
     for (uint64_t k = 0; k < total && !g_stop; k++) {
@@ -99,10 +100,7 @@ int main(int argc, char **argv) {
         bbw_seqlock_write(prod, &f);
         sem_post(&prod->frame_ready);
 
-        frame_ring_push(&shad->in, &f);
-        int sv = 0;
-        sem_getvalue(&shad->frame_ready, &sv);
-        if (sv < 64) sem_post(&shad->frame_ready);        /* bounded, even if v2 is frozen */
+        bcast_publish(&shin->in, &f);      /* overwrite-oldest: v2 can never hold the plant up */
 
         /* ---- 3. collect v1's answer at the deadline ----
          * v1's 8 ms starts when it is actually given the frame. If the plant
@@ -120,11 +118,15 @@ int main(int argc, char **argv) {
             rr.applied = 1;
             rr.latency_ns = recv_ns - f.t_ns;
         } else {
-            /* deadline miss: safe fallback, all braking on the discs */
+            /* deadline miss: fallback = no motor braking, discs only, and never
+             * more than 95% of the rear grip (the request alone could exceed it;
+             * the rest is the front axle's job). Illustrative, not a real car's
+             * degraded mode: see docs/how-it-works.md. */
             misses++;
             c.seq = k;
             c.f_regen = 0;
             c.f_friction = f.f_rear_req;
+            if (c.f_friction > 0.95 * f.f_rear_grip) { c.f_friction = 0.95 * f.f_rear_grip; fallback_limited++; }
             c.t_done_ns = 0;
             rr.latency_ns = -1;
         }
@@ -135,23 +137,26 @@ int main(int argc, char **argv) {
         rr.cmd = c;
         rr.p_regen_w = p;
 
-        rr.shadow_dropped = atomic_load(&shad->in.dropped);
+        rr.shadow_dropped = 0;             /* the comparer counts what v2 missed */
         rr.plant_lag_ns = lag;
         rec_ring_push(&rec->cycles, &rr);
     }
 
+    rec->plant_rt_ok = plant_rt ? 1 : -1;
+    rec->v1_rt_ok = atomic_load(&prod->v1_rt_ok);
+    rec->actuator_rejects = bbw_actuator_rejects();
+    rec->fallbacks = misses;
     atomic_store(&prod->plant_running, 0);
-    atomic_store(&shad->plant_running, 0);
+    atomic_store(&shin->plant_running, 0);
     atomic_store(&rec->plant_running, 0);
     sem_post(&prod->frame_ready);
-    sem_post(&shad->frame_ready);
     atomic_store(&rec->run_done, 1);
 
     fprintf(stderr, "[plant] done: %llu cycles, %llu v1 deadline misses, %llu plant overruns (host/OS late), "
-                    "%llu clamps, %llu shadow frames dropped, %llu records dropped\n",
+                    "%llu clamps, %llu fallbacks limited by grip, %llu actuator commands rejected, %llu records dropped\n",
             (unsigned long long)total, (unsigned long long)misses, (unsigned long long)overruns,
-            (unsigned long long)clamps,
-            (unsigned long long)atomic_load(&shad->in.dropped),
+            (unsigned long long)clamps, (unsigned long long)fallback_limited,
+            (unsigned long long)rec->actuator_rejects,
             (unsigned long long)atomic_load(&rec->cycles.dropped));
 
     sleep(2);                       /* let the others drain and exit */

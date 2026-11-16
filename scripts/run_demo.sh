@@ -10,7 +10,9 @@
 #   freeze    v2 hangs for 2 s right as the car brakes for the first chicane
 #   sigstop   v2 is stopped from outside (SIGSTOP) for 2 s, then resumed
 #   flood     v2 plus CPU-burning threads at shadow priority
-#   attack    v2 tries to command the brakes directly
+#   attack    a hostile v2 tries every route to the trusted side: the brakes,
+#             v1's memory, the evidence, its own inputs, signalling v1,
+#             out-ranking v1, moving onto v1's CPU (each reported separately)
 #   all       every scenario above, one after another
 #   stop      end a run that is in progress (kills the programs it started)
 #
@@ -19,13 +21,17 @@
 #   LAP=file          lap CSV (default data/lap_a.csv)
 #   SECONDS_MAX=n     stop after n seconds (default: whole lap)
 #   START_DELAY_MS=n  how long the car waits before rolling (default 2500)
-#   CANDIDATE=v2.1    which candidate v2 runs: v2 (default, flawed) or v2.1 (fixed)
+#   CANDIDATE=v2.1    which candidate runs in the shadow: v2 (default, flawed),
+#                     v2.1 (v2 fixed) or v3 (different idea, blending flaw)
 #   PLANT_ARGS="..."  conditions for the car, e.g. "--soc0 0.7 --ambient 40 --grip 0.9 --laps 3"
 #   PROD_CPU=n        pin plant and v1 to CPU n
 #   SHADOW_CPU=n      pin v2, comparer and hog to CPU n
 #   HOG_PRIO=n        priority of the CPU burners (default 10 = shadow level; 0 = normal)
-#   V2_USER=name      QNX only: run v2 as this user (e.g. qnxuser) so it
+#   V2_USER=name      run v2 as this user (QNX: qnxuser; Linux as root: nobody) so it
 #                     cannot open the production region or the actuator
+#   REQUIRE_RT=0|1    1 = the plant and v1 refuse to run without real-time
+#                     scheduling, CPU pinning and locked memory (default 1 on
+#                     QNX, 0 elsewhere). A timing result is only evidence if 1.
 
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -44,6 +50,7 @@ OUTROOT=${2:-out}
 if [ "$(uname -s)" = "QNX" ]; then HOGP=${HOG_PRIO:-10}; else HOGP=${HOG_PRIO:-0}; fi
 
 CAND="--candidate ${CANDIDATE:-v2}"
+if [ "$(uname -s)" = "QNX" ]; then REQ=${REQUIRE_RT:-1}; else REQ=${REQUIRE_RT:-0}; fi
 
 pin() { [ -n "${1:-}" ] && echo "--cpu $1"; }
 PP=$(pin "${PROD_CPU:-}")
@@ -54,7 +61,9 @@ MAXA=""
 # exec, so that "$!" after "as_v2 ... &" is v2's own process id
 as_v2() {
     if [ -n "${V2_USER:-}" ] && command -v on >/dev/null 2>&1; then
-        exec on -u "$V2_USER" "$@"
+        exec on -u "$V2_USER" "$@"                 # QNX
+    elif [ -n "${V2_USER:-}" ] && command -v runuser >/dev/null 2>&1; then
+        exec runuser -u "$V2_USER" -- "$@"         # Linux, when started as root
     else
         exec "$@"
     fi
@@ -81,13 +90,14 @@ run_one() {
     echo "=== scenario: $s  ->  $out"
     PIDS=""
 
-    "$BIN/bbw_plant" --lap "$LAP" $MAXA $PP --start-delay-ms $START_DELAY_MS ${PLANT_ARGS:-} > "$out/plant.log" 2>&1 &
+    BBW_REQUIRE_RT=$REQ "$BIN/bbw_plant" --lap "$LAP" $MAXA $PP --start-delay-ms $START_DELAY_MS ${PLANT_ARGS:-} > "$out/plant.log" 2>&1 &
     PLANT=$!
     PIDS="$PIDS $PLANT"
     mkdir -p "$OUTROOT" && echo "$$ $PLANT" > "$OUTROOT/.pids"
     sleep 1
-    "$BIN/bbw_v1" $PP > "$out/v1.log" 2>&1 &
-    PIDS="$PIDS $!"
+    BBW_REQUIRE_RT=$REQ "$BIN/bbw_v1" $PP > "$out/v1.log" 2>&1 &
+    V1=$!
+    PIDS="$PIDS $V1"
     "$BIN/bbw_comparer" --out "$out" $SP > "$out/comparer.log" 2>&1 &
     COMP=$!
     PIDS="$PIDS $COMP"
@@ -115,7 +125,7 @@ run_one() {
             ;;
         attack)
             sleep 2
-            ( as_v2 "$BIN/bbw_v2" --attack ) > "$out/v2.log" 2>&1     # subshell: as_v2 uses exec
+            ( as_v2 "$BIN/bbw_v2" --attack --v1-pid "$V1" ${PROD_CPU:+--v1-cpu $PROD_CPU} ) > "$out/v2.log" 2>&1     # subshell: as_v2 uses exec
             echo "attack exit code: $?" >> "$out/v2.log"
             ;;
         *) echo "unknown scenario $s"; cleanup; return 1 ;;
@@ -125,7 +135,7 @@ run_one() {
     wait $PLANT
     wait $COMP 2>/dev/null
     cleanup
-    cat "$out/plant.log" "$out/comparer.log" | grep "done" | sed 's/^/    /'
+    cat "$out/plant.log" "$out/comparer.log" | grep -E "done|not valid|ERROR" | sed 's/^/    /'
     # if started with sudo, give the results back to the normal user
     [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUTROOT" 2>/dev/null
     cat "$out"/v2.log "$out"/events.log 2>/dev/null | grep -E "ATTACK|injected|SIG" | sed "s/^/    /"

@@ -36,6 +36,9 @@ int main(void) {
                     if (a.f_regen > car_motor_force_limit(f.v, f.motor_temp_c, 1) + 1e-6) fails++;
                     if (a.f_regen + a.f_friction > f.f_rear_grip) fails++;
                     if (a.f_regen < 0 || a.f_friction < -1e-6) fails++;
+                    if (hazard(&f, &a) != DIS_NONE) fails++;      /* v1 passes the absolute checks */
+                    strategy_v2_fixed(&f, &b);
+                    if (hazard(&f, &b) != DIS_NONE) fails++;      /* so does v2.1 */
                 }
     assert(fails == 0);
 
@@ -69,6 +72,32 @@ int main(void) {
     assert(c == DIS_REAR_LOCK_RISK);
 
     assert(classify(&f, &a, &b, 0, 50) == DIS_SHADOW_MISSING);
+
+    /* absolute, not relative: a flaw v1 and v2 SHARE is still caught */
+    assert(classify(&f, &b, &b, 1, 50) == DIS_REAR_LOCK_RISK);
+
+    /* a single frame of a hard limit is hard; soft limits are not */
+    assert(dis_is_hard(DIS_REAR_LOCK_RISK) && dis_is_hard(DIS_DEMAND_NOT_MET));
+    assert(!dis_is_hard(DIS_OVER_BATTERY) && !dis_is_hard(DIS_OVER_MOTOR));
+
+    /* nonsense output is treated as no answer, never as a decision */
+    bbw_cmd_t nan_cmd = { .seq = f.seq, .f_regen = NAN, .f_friction = 0 };
+    bbw_cmd_t neg_cmd = { .seq = f.seq, .f_regen = 0, .f_friction = -500 };
+    assert(!cmd_plausible(&nan_cmd) && !cmd_plausible(&neg_cmd));
+    assert(classify(&f, &a, &nan_cmd, 1, 50) == DIS_SHADOW_MISSING);
+
+    /* v3: lap energy used up, motor not allowed to harvest, and the discs are
+     * not told to make up the difference -> braking demand not met */
+    f = frame(250, 30, 0.5, LAP_HARVEST_CAP_J + 1);
+    strategy_v1(&f, &a); strategy_v3(&f, &b);
+    c = classify(&f, &a, &b, 1, 50);
+    printf("v3, cap used: asked %.0f N, v1 rear %.0f N, v3 rear %.0f N -> %s\n",
+           f.f_rear_req, a.f_regen + a.f_friction, b.f_regen + b.f_friction, dis_name(c));
+    assert(c == DIS_DEMAND_NOT_MET);
+    /* ... but with charge allowed, v3 behaves */
+    f = frame(250, 30, 0.5, 0.5e6);
+    strategy_v1(&f, &a); strategy_v3(&f, &b);
+    assert(hazard(&f, &b) == DIS_NONE);
 
     /* hot motor: v1 backs off, v2 ignores the temperature limit */
     f = frame(250, 30, 0.5, 0.5e6);

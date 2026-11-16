@@ -17,31 +17,55 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "bbw.h"
+#include "control.h"
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static bbw_cmd_t g_latest;
 static int64_t   g_recv_ns;
 static int       g_have;
+static uint64_t  g_rejects;
 static pthread_t g_thread;
 static volatile int g_stop;
 
-/* Start the service thread with the caller's scheduling policy and priority. */
+/* Start the service thread with the caller's scheduling policy and priority,
+ * then (inside the thread) pin it to the same CPU explicitly: on QNX the
+ * runmask belongs to a thread and is not copied to new threads by default. */
+static void *(*g_fn)(void *);
+static void *thread_main(void *arg) {
+    bbw_rt_setup_thread("plant-actuator");
+    return g_fn(arg);
+}
 static int start_thread(void *(*fn)(void *)) {
     pthread_attr_t a;
     pthread_attr_init(&a);
     pthread_attr_setinheritsched(&a, PTHREAD_INHERIT_SCHED);
-    int rc = pthread_create(&g_thread, &a, fn, NULL);
+    g_fn = fn;
+    int rc = pthread_create(&g_thread, &a, thread_main, NULL);
     pthread_attr_destroy(&a);
     return rc == 0 ? 0 : -1;
 }
 
+/* The actuator does not trust whoever writes to it: a command must be a sane
+ * number and must not go back in time. A bad command is counted and dropped;
+ * it never replaces the last good one (so the plant falls back if needed). */
 static void store(const bbw_cmd_t *c) {
     int64_t now = bbw_now_ns();
     pthread_mutex_lock(&g_lock);
-    g_latest = *c;
-    g_recv_ns = now;
-    g_have = 1;
+    if (!cmd_plausible(c) || (g_have && c->seq < g_latest.seq)) {
+        g_rejects++;
+    } else {
+        g_latest = *c;
+        g_recv_ns = now;
+        g_have = 1;
+    }
     pthread_mutex_unlock(&g_lock);
+}
+
+uint64_t bbw_actuator_rejects(void) {
+    pthread_mutex_lock(&g_lock);
+    uint64_t r = g_rejects;
+    pthread_mutex_unlock(&g_lock);
+    return r;
 }
 
 int bbw_actuator_latest(bbw_cmd_t *out, int64_t *recv_ns) {

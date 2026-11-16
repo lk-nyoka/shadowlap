@@ -6,11 +6,13 @@
  *   --crash-at SEQ          crash (SIGSEGV) when it reaches frame SEQ
  *   --freeze-at SEQ --freeze-ms MS   hang for MS milliseconds at frame SEQ
  *   --slow-ms MS            take MS extra milliseconds on every frame
- *   --attack                try to open and write the actuator, report result
+ *   --attack [--v1-pid P --v1-cpu C]   try every route to the trusted side, report each
  *   --candidate v2|v2.1     which candidate strategy to run (default v2)
  */
 #define _GNU_SOURCE
 #include <errno.h>
+#include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,20 +21,66 @@
 #include <unistd.h>
 #include "bbw.h"
 #include "control.h"
+#ifdef __QNX__
+#include <sys/neutrino.h>
+#endif
 
-static int try_attack(void) {
+/* --attack: a hostile v2 tries every route to the trusted side it can think
+ * of. Each line says BLOCKED or NOT BLOCKED; exit code = number not blocked.
+ * Nothing is actually harmed: the signal probe uses signal 0 (permission
+ * check only) and any priority or CPU change is undone at once. */
+static int g_open_routes;
+static void probe(const char *what, int blocked, const char *why) {
+    fprintf(stderr, "[v2] ATTACK %s: %s%s%s\n", blocked ? "BLOCKED" : "NOT BLOCKED", what,
+            why ? " -> " : "", why ? why : "");
+    if (!blocked) g_open_routes++;
+}
+
+static int try_attack(int v1_pid, int v1_cpu) {
+    /* 1. command the brakes */
     int fd = bbw_actuator_open();
-    if (fd < 0) {
-        fprintf(stderr, "[v2] ATTACK BLOCKED: opening %s failed: %s\n",
-                BBW_ACTUATOR_PATH, strerror(errno));
-        return 0;
+    if (fd < 0) probe("open the brake actuator " BBW_ACTUATOR_PATH, 1, strerror(errno));
+    else {
+        bbw_cmd_t evil = { .seq = 0, .f_regen = 1e6, .f_friction = 0 };
+        int ok = bbw_actuator_send(fd, &evil) == 0;
+        probe("write to the brake actuator", !ok, ok ? "write accepted (the actuator still rejects absurd values)" : strerror(errno));
+        close(fd);
     }
-    bbw_cmd_t evil = { .seq = 0, .f_regen = 1e6, .f_friction = 0 };
-    int ok = bbw_actuator_send(fd, &evil) == 0;
-    fprintf(stderr, ok ? "[v2] ATTACK NOT BLOCKED: wrote to %s (no isolation enforced on this system)\n"
-                       : "[v2] ATTACK BLOCKED: write to %s failed\n", BBW_ACTUATOR_PATH);
-    close(fd);
-    return ok;
+    /* 2. read or change what v1 sees */
+    probe("open v1's region " BBW_SHM_PROD, bbw_shm_open(BBW_SHM_PROD, sizeof(bbw_prod_t), 0) == NULL, strerror(errno));
+    /* 3. tamper with the evidence */
+    probe("open the evidence region " BBW_SHM_REC, bbw_shm_open(BBW_SHM_REC, sizeof(bbw_rec_t), 0) == NULL, strerror(errno));
+    /* 4. change its own inputs (it may only read them) */
+    probe("open its input region " BBW_SHM_SHIN " for writing",
+          bbw_shm_open(BBW_SHM_SHIN, sizeof(bbw_shin_t), 0) == NULL, strerror(errno));
+    /* 5. signal (stop/kill) v1 */
+    if (v1_pid > 0) {
+        int r = kill(v1_pid, 0);
+        probe("signal v1 (stop or kill it)", r != 0, r != 0 ? strerror(errno) : "permitted");
+    }
+    /* 6. out-rank v1: raise its own priority above v1's */
+    struct sched_param sp = { .sched_priority = BBW_PRIO_V1 + 5 }, old;
+    int pol = 0;
+    pthread_getschedparam(pthread_self(), &pol, &old);
+    int r = pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+    probe("raise its priority above v1's", r != 0, r != 0 ? strerror(r) :
+          "permitted: needs a CPU budget (QNX adaptive partitioning) or a lower priority ceiling");
+    if (r == 0) pthread_setschedparam(pthread_self(), pol, &old);
+    /* 7. move onto v1's CPU */
+    if (v1_cpu >= 0) {
+#ifdef __QNX__
+        int m = ThreadCtl(_NTO_TCTL_RUNMASK, (void *)(uintptr_t)(1u << v1_cpu));
+        probe("move onto v1's CPU", m == -1, m == -1 ? strerror(errno) :
+              "permitted, but v1 still out-ranks it there (unless 6 succeeded)");
+#elif defined(__linux__)
+        cpu_set_t set; CPU_ZERO(&set); CPU_SET(v1_cpu, &set);
+        int m = sched_setaffinity(0, sizeof set, &set);
+        probe("move onto v1's CPU", m != 0, m != 0 ? strerror(errno) :
+              "permitted, but v1 still out-ranks it there (unless 6 succeeded)");
+#endif
+    }
+    fprintf(stderr, "[v2] attack summary: %d route(s) not blocked\n", g_open_routes);
+    return g_open_routes;
 }
 
 int main(int argc, char **argv) {
@@ -43,54 +91,64 @@ int main(int argc, char **argv) {
     int cpu       = bbw_arg_int(argc, argv, "--cpu", -1);
     const char *cand = bbw_arg_str(argc, argv, "--candidate", "v2");
 
-    if (bbw_arg_flag(argc, argv, "--attack")) {
-        /* the attack needs the plant's actuator to exist; give it a moment */
-        return try_attack() ? 2 : 0;
-    }
+    if (!candidate_known(cand)) { fprintf(stderr, "[v2] unknown candidate %s\n", cand); return 1; }
+    if (bbw_arg_flag(argc, argv, "--attack"))
+        return try_attack(bbw_arg_int(argc, argv, "--v1-pid", -1), bbw_arg_int(argc, argv, "--v1-cpu", -1)) ? 2 : 0;
 
     /* The production region must be unreachable for v2. Show it. */
     if (bbw_shm_open(BBW_SHM_PROD, sizeof(bbw_prod_t), 0) != NULL)
         fprintf(stderr, "[v2] note: production region is readable by v2 on this system "
-                        "(on QNX, run v2 as a separate user to deny this)\n");
+                        "(run v2 as a separate user to deny this)\n");
 
-    bbw_shadow_t *sh = bbw_shm_open(BBW_SHM_SHADOW, sizeof *sh, 10000);
-    if (!sh) { fprintf(stderr, "[v2] cannot open %s: %s\n", BBW_SHM_SHADOW, strerror(errno)); return 1; }
+    const bbw_shin_t *in = bbw_shm_open_ro(BBW_SHM_SHIN, sizeof *in, 10000);
+    if (!in) { fprintf(stderr, "[v2] cannot open %s: %s\n", BBW_SHM_SHIN, strerror(errno)); return 1; }
+    bbw_shout_t *out = bbw_shm_open(BBW_SHM_SHOUT, sizeof *out, 10000);
+    if (!out) { fprintf(stderr, "[v2] cannot open %s: %s\n", BBW_SHM_SHOUT, strerror(errno)); return 1; }
     bbw_rt_setup("v2", BBW_PRIO_V2, cpu);
-    frame_ring_skip_to_head(&sh->in);          /* ignore any stale backlog */
-    fprintf(stderr, "[v2] shadowing as candidate %s (pid %d)\n", cand, (int)getpid());
+    /* start from the newest frame: a restarted v2 does not replay a backlog */
+    uint64_t next = atomic_load_explicit(&((bcast_ring_t *)&in->in)->head, memory_order_acquire);
+    fprintf(stderr, "[v2] shadowing as candidate %s (pid %d), inputs mapped read-only\n", cand, (int)getpid());
 
-    uint64_t handled = 0;
+    uint64_t handled = 0, lost = 0;
+    int idle_ms = 0;
     while (1) {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 1;
-        sem_timedwait(&sh->frame_ready, &ts);
-
         bbw_frame_t f;
-        int got = 0;
-        while (frame_ring_pop(&sh->in, &f)) {
-            got = 1;
-            if (crash_at >= 0 && (long long)f.seq >= crash_at) {
-                fprintf(stderr, "[v2] injected crash at frame %llu\n", (unsigned long long)f.seq);
-                raise(SIGSEGV);
-            }
-            if (freeze_at >= 0 && (long long)f.seq >= freeze_at) {
-                fprintf(stderr, "[v2] injected freeze for %d ms at frame %llu\n",
-                        freeze_ms, (unsigned long long)f.seq);
-                usleep((useconds_t)freeze_ms * 1000);
-                freeze_at = -1;
-            }
-            if (slow_ms > 0) usleep((useconds_t)slow_ms * 1000);
-
-            bbw_cmd_t c;
-            strategy_candidate(cand, &f, &c);
-            c.t_done_ns = bbw_now_ns();
-            cmd_ring_push(&sh->out, &c);
-            atomic_store(&sh->v2_heartbeat_ns, c.t_done_ns);
-            handled++;
+        int r = bcast_read(&in->in, next, &f);
+        if (r == 0) {                                   /* nothing new: poll again in 1 ms */
+            if (!atomic_load(&((bbw_shin_t *)in)->plant_running) && ++idle_ms > 200) break;
+            struct timespec ts = { 0, 1000000 };
+            nanosleep(&ts, NULL);
+            continue;
         }
-        if (!got && !atomic_load(&sh->plant_running)) break;
+        idle_ms = 0;
+        if (r < 0) {                                    /* fell behind: skip to what still exists */
+            uint64_t h = atomic_load_explicit(&((bcast_ring_t *)&in->in)->head, memory_order_acquire);
+            uint64_t oldest = h > BBW_RING_N / 2 ? h - BBW_RING_N / 2 : 0;
+            if (next < oldest) { lost += oldest - next; next = oldest; } else { lost++; next++; }
+            atomic_store(&out->v2_lost, lost);
+            continue;
+        }
+        next++;
+        if (crash_at >= 0 && (long long)f.seq >= crash_at) {
+            fprintf(stderr, "[v2] injected crash at frame %llu\n", (unsigned long long)f.seq);
+            raise(SIGSEGV);
+        }
+        if (freeze_at >= 0 && (long long)f.seq >= freeze_at) {
+            fprintf(stderr, "[v2] injected freeze for %d ms at frame %llu\n",
+                    freeze_ms, (unsigned long long)f.seq);
+            usleep((useconds_t)freeze_ms * 1000);
+            freeze_at = -1;
+        }
+        if (slow_ms > 0) usleep((useconds_t)slow_ms * 1000);
+
+        bbw_cmd_t c;
+        strategy_candidate(cand, &f, &c);
+        c.t_done_ns = bbw_now_ns();
+        cmd_ring_push(&out->out, &c);
+        atomic_store(&out->v2_heartbeat_ns, c.t_done_ns);
+        handled++;
     }
-    fprintf(stderr, "[v2] done: %llu frames shadowed\n", (unsigned long long)handled);
+    fprintf(stderr, "[v2] done: %llu frames shadowed, %llu lost\n", (unsigned long long)handled,
+            (unsigned long long)lost);
     return 0;
 }

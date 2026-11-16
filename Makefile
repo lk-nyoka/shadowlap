@@ -47,14 +47,14 @@ $(BUILD):
 	mkdir -p $@
 
 test: build/host/test_ring build/host/test_control
-	build/host/test_ring && build/host/test_control
+	build/host/test_ring && build/host/test_control && python3 tests/test_gate.py
 
 build/host/test_ring: tests/test_ring.c include/bbw.h
 	mkdir -p build/host
-	cc -std=gnu11 -O2 -Wall -Iinclude -o $@ tests/test_ring.c -lpthread
+	cc -std=gnu11 -O2 -Wall -Wextra -Iinclude -o $@ tests/test_ring.c -lpthread
 build/host/test_control: tests/test_control.c src/control.c include/*.h
 	mkdir -p build/host
-	cc -std=gnu11 -O2 -Wall -Iinclude -o $@ tests/test_control.c src/control.c -lm
+	cc -std=gnu11 -O2 -Wall -Wextra -Iinclude -o $@ tests/test_control.c src/control.c -lm
 
 # Copy everything the target needs into one folder for scp/sftp
 bundle: all

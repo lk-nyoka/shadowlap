@@ -1,60 +1,115 @@
 # Shadow Lap
 
-**Test a new brake-by-wire controller against a real lap without letting it
-touch the brakes. Built on QNX 8.0.**
+**Test the next brake controller without putting it in control. A QNX 8.0
+prototype.**
 
-Racing teams get very little track time, and every road-car maker that blends
-motor braking with disc braking has the same problem: you can't let untested
-control software brake a real car. Shadow Lap runs the new controller (v2)
-beside the trusted one (v1). v2 sees every input and makes every decision, but
-its decisions only go into a log. v1 stays in charge, and nothing v2 does
-(crashing, hanging, hogging the CPU, attacking the brakes) can make v1 late.
+Every road-car maker that blends motor braking with disc braking, and every
+racing team, has the same problem: you can't let untested control software
+brake a real car. Shadow Lap runs the candidate controller (v2) beside the
+trusted one (v1). v2 sees every input and makes every decision, but its
+decisions only go into a log. v1 keeps sole control of the actuator. In our
+tests, none of the injected candidate failures (crashing, hanging, being
+stopped, flooding its CPU, attacking the brakes) made v1 miss a deadline.
 
-The output is evidence: every moment the two disagreed, why, and how serious it was.
+The output is evidence: every moment the candidate broke a limit or
+disagreed, why, how serious it was, and a verdict that fails closed.
+
+Shadow-mode testing of vehicle software is established practice (Bosch, for
+example, holds US patent 12,386,724 on running a released and an updated
+software version side by side and comparing them). What Shadow Lap adds is an
+open, QNX-native reference implementation for **brake blending**, with
+OS-enforced isolation that is tested route by route, safety checks that are
+absolute rather than only relative to v1, and a release-evidence gate that
+treats missing evidence as a failure.
 
 > Entry for the QNX Global Hackathon 2026, category **Automotive & Mobility**.
-> Working name; rename freely.
+
+## Why: braking software updates go wrong
+
+In 2025 Volvo recalled about 14,000 US plug-in hybrids and EVs after Brake
+Control Module software version 3.5.14, installed at dealers, could lose
+braking after coasting downhill for about 100 seconds in "B" mode or One
+Pedal Drive (NHTSA recall 25V392). That is a blending failure: regenerative
+braking is unavailable, and the braking the driver expects does not arrive.
+
+Shadow Lap's third candidate, **v3**, has a flaw of that kind on purpose: when
+the motor is not allowed to take its share (battery nearly full, or the lap's
+energy limit used up), it does not make up the difference with the discs. The
+`demand_not_met` check catches it.
 
 ## What it looks like
 
 The dashboard replays a **real F1 lap** (Monza 2024 qualifying pole, 1:19.327,
 from free public timing data) and shows, moment by moment:
 
-- **the car on a map of the real circuit**, drawn from its real position data,
-  with braking zones marked and dots where v2 got it wrong;
+- **the car on a map of the real circuit**, drawn from its position data, with
+  braking zones marked and dots where the candidate broke a limit;
 - **the rear brakes right now**: what the driver asks for, how v1 (in charge)
-  splits it between motor and discs, how v2 (in shadow) would have split it,
+  splits it between motor and discs, how the candidate would have split it,
   against the tyre-grip limit;
-- **one plain sentence** saying what is happening, e.g. *"Braking from 331 km/h
-  at 5.1 g. v2 would ask the rear tyres for more than they can grip: the rear
+- **one plain sentence** saying what is happening, e.g. *"Braking from 210 km/h
+  at 4.3 g. v2 would ask the rear tyres for more than they can grip: the rear
   wheels could lock. v1 stays under the limit."*
 
-Pick the **conditions** at the top (normal day, worn tyres, hot day, or
-both). On a normal day v2's flaws stay hidden; with hot weather and worn tyres
-the same lap shows v2 risking a rear lock at the first braking zone (about 9 s
-in) and over-asking a hot motor later in the lap, while v1 stays safe.
+Pick the **conditions** at the top (normal day, worn tyres, hot day, or both)
+and the **candidate** (v2, v2.1, v3). On a normal day v2's flaws stay hidden;
+with hot weather and worn tyres the same lap shows v2 risking a rear lock at
+the first braking zone (about 9 s in) and over-asking a hot motor later.
 
-What is real: speed, throttle, brake on/off, track position, lap time. What
-is modelled: battery, motor, wings, grip and forces, with grip and downforce
-fitted so the real pole lap uses up to 93% of the modelled grip at its hardest
-braking (5.6 g).
+**What is real and what is modelled.** From OpenF1 (unofficial, free for
+non-commercial use; about 3.7 samples a second): speed, throttle, brake
+on/off, track position, lap time. Shadow Lap interpolates that to a 100 Hz
+replay, so the 10 ms frames are simulation frames, not 100 Hz measurements,
+and the braking g is derived from smoothed speed. Battery, motor, wings, grip
+and forces are a small model inspired by the 2026 rules (350 kW motor; the
+2.4 MJ lap harvest limit is a scaled, illustrative number, not the FIA's
+8.5 MJ). Grip and downforce are fitted so the real pole lap uses up to 93% of
+the modelled grip at its hardest braking. Mixing a 2024 lap with 2026-style
+parameters is a modelling choice, not an FIA-compliant car.
 
-**Across 600 laps of that real lap** in changing conditions (battery 50–92%,
-air 10–45 °C, track grip 85–105%), run in under a second by `bbw_sweep`:
+### Many laps: what the checks found
+
+`bbw_sweep` replays the real lap 600 times (200 runs × 3 laps) with battery
+50–92%, air 10–45 °C and track grip 85–105%, in under a second. **Hard limits**
+(rear lock risk, braking demand not met) count from a single 10 ms frame;
+**soft limits** (battery, lap energy, motor heat) once they last 50 ms. The
+same checks run on v1.
 
 | Finding | Depends on | Result |
 |---|---|---|
-| v2 risks locking the rear wheels | track grip | 100% of laps at 85–92% grip, 93% at 92–99%, 0% at normal grip |
+| v2 risks locking the rear wheels | track grip | 100% of laps below 99% grip, 0% at normal grip; worst request 16% over the grip limit |
 | v2 over-asks a hot motor | air temperature | 37% of laps at 10–25 °C, 67% at 25–35 °C, 96% at 35–45 °C |
 | v2 over-asks a hot motor | lap of the run | 27% on lap 1, 84% on lap 2, 82% on lap 3 |
-| v2 overall | | unsafe on 600 of 600 laps: **rejected** |
-| v2.1 (flaws fixed) | | unsafe on 0 of 600 laps: **approved** |
+| v3 brakes less than asked | lap of the run | 92% of first laps, 30% of later laps |
+| v1 (the baseline) | | broke no limit on any frame; peak rear grip use 95% |
+
+| Candidate | Laps with a limit break | Gate verdict |
+|---|---|---|
+| v2 | 600 of 600 (hard limit on 420) | **FAIL** |
+| v3 | 304 of 600 (all hard: demand not met) | **FAIL** |
+| v2.1 (v2 with its flaws fixed) | 0 of 600, peak grip use 95% | **PASS_WITHIN_SCOPE** |
+
+PASS_WITHIN_SCOPE means "no limit broken in this campaign": these laps, these
+condition ranges, this car model. Zero failures in 600 related laps is not a
+safety proof; it is evidence for the next validation stage (hardware in the
+loop, then a supervised vehicle test).
+
+**Open-loop vs counterfactual.** In shadow mode v2 sees the car v1 drives, so
+v2's own decisions never shape the battery, lap energy or motor heat it sees.
+`bbw_sweep --mode counterfactual` lets v2 drive its own copy of the car. On
+this lap it changed little (v2's hot-motor laps went from 387 to 406 of 600;
+v2.1 still passed), because the car model refuses to let a motor exceed its
+limits either way.
 
 ### Results on QNX 8.0
 
-Full laps, 9,016 frames each, QNX 8.0 in QEMU (2 CPUs) on a Windows 11 laptop.
-v1 and the car pinned to CPU 0, v2 to CPU 1, v2 running as an unprivileged
-user (`V2_USER=qnxuser`).
+**These timing results were measured on 15 November, before the isolation
+and gate changes of 16 November. They are being re-run on the current code;
+until then treat them as the previous version's results.**
+
+Full laps, 9,016 frames each, QNX SDP 8.0 in QEMU (2 CPUs) on a Windows 11
+laptop. v1 and the car pinned to CPU 0, v2 to CPU 1, v2 running as an
+unprivileged user (`V2_USER=qnxuser`).
 
 A **v1 miss** means v1 had its full 8 ms after receiving a frame and still
 didn't answer. A **host stall** means the simulated car itself was woken more
@@ -70,26 +125,32 @@ than 2 ms late (QNX here runs inside a VM on Windows, which still pauses it).
 | CPU flood on shadow side | 0 | 13 | 185 µs | 0.88 ms |
 | v2 attacks the actuator | 0 | 7 | 246 µs | 1.56 ms |
 
-**The attack is blocked by the OS:**
-`[v2] ATTACK BLOCKED: opening /dev/bbw/actuator failed: Permission denied`
-
 The first shadow run gave 2 v1 misses with 337 host stalls, far more stalls
 than any other run; a rerun gave the row above. We read the first as the
 Windows host being busy, and keep both in the record.
 
-### Same laptop, same code, without QNX
+**The attack test (current code)** now tries seven routes and reports each.
+Run as an unprivileged user on Linux, six are blocked by the OS (the
+actuator, v1's memory, the evidence, writing its own inputs, signalling v1,
+raising its priority above v1's); moving onto v1's CPU is allowed, though v1
+still out-ranks it there. On QNX, an unprivileged process may by default use
+priorities up to 63, so raising v2 above v1 may well be allowed there: the
+fix is a CPU budget for the shadow (QNX adaptive partitioning) or a security
+policy, see [docs/security-policy.md](docs/security-policy.md). The re-run
+will record what QNX actually does.
 
-| | Ubuntu in WSL (real-time priority) | QNX 8.0 in QEMU |
+### The same laptop without QNX
+
+| | Linux in WSL2 (a Hyper-V VM, real-time priority) | QNX SDP 8.0 in QEMU |
 |---|---|---|
 | v1 deadline misses (shadow lap) | 40 | **0** |
 | Host stalls | 82 | 48 |
 | v1 worst response | 7.96 ms | **1.96 ms** |
-| v2 attacks the brakes | not blocked | **blocked** |
 
-On Linux in a cloud container (no Windows underneath) v1 also stayed at 0–2
-misses, but nothing stopped the attack: v2's write displaced v1's command for
-one frame (the car fell back to disc-only braking; v2's command was never
-applied).
+This is an observation about these two setups, both running on top of the
+Windows host scheduler, not proof that Linux cannot do real time (PREEMPT_RT
+Linux on the same hardware would be the fair comparison). On Linux in a cloud
+container v1 also stayed at 0–2 misses.
 
 ## How it works
 
@@ -100,7 +161,7 @@ Five separate processes. Full plain-English walkthrough:
  lap replay ─► bbw_plant (the car, owns the clock and the actuator)
                  │  frame every 10 ms
         ┌────────┴─────────────┐
-        ▼                      ▼  copy on a ring that never blocks
+        ▼                      ▼  read-only broadcast ring (v2 cannot write it)
      bbw_v1 ──write()──►    bbw_v2 (shadow: watches only)
    /dev/bbw/actuator           │ proposals
    (only v1 can open)          ▼
@@ -111,11 +172,17 @@ QNX features used:
 
 - **Resource manager**: the brake actuator is `/dev/bbw/actuator`. v1's
   `write()` is a QNX message, and the plant thread handling it inherits v1's priority.
-- **Process isolation + shared memory**: three separate regions, so v2 can
-  only ever see its own.
+- **Process isolation + shared memory**: four regions. v1's region and the
+  evidence are closed to v2; v2 maps its inputs read-only; its output region
+  is treated as untrusted and checked by the comparer.
 - **Fixed priorities** (`SCHED_FIFO`) and **CPU pinning** (`ThreadCtl` runmask).
-- **Permissions and security policies**: v2 is denied the actuator by the OS.
-  See [docs/security-policy.md](docs/security-policy.md).
+- **Permissions**: v2 runs as another user and is denied the actuator, v1's
+  memory and the evidence. A QNX security policy (prepared, not yet run) is
+  the stronger next step: [docs/security-policy.md](docs/security-policy.md).
+- **Real-time setup is verified, not assumed**: every safety-relevant thread
+  (including the actuator thread) sets and checks its priority and CPU; on
+  QNX a run that fails to get real-time scheduling refuses to start
+  (`REQUIRE_RT=1`), and the evidence records it.
 
 ## Run it
 
@@ -136,22 +203,30 @@ python3 tools/report.py out                  # writes out/report.html
 verdict on v2 from the run's evidence, with every number checked against the
 data. Free options (local Ollama or a free Gemini key): [docs/ai-analyst.md](docs/ai-analyst.md).
 
-**Many laps and the release gate:**
+**Many laps and the release-evidence gate:**
 
 ```bash
-build/host/bbw_sweep --runs 200 --laps 3 --out out/sweep                    # candidate v2
+build/host/bbw_sweep --runs 200 --laps 3 --out out/sweep                       # candidate v2
 build/host/bbw_sweep --runs 200 --laps 3 --candidate v2.1 --out out/sweep-v2.1
-python3 tools/gate.py out/sweep/summary.json          # REJECTED, with reasons
-python3 tools/gate.py out/sweep-v2.1/summary.json     # APPROVED
+build/host/bbw_sweep --runs 200 --laps 3 --candidate v2.1 --mode counterfactual --out out/sweep-v2.1-cf
+python3 tools/gate.py out/sweep/summary.json          # FAIL, with reasons (exit 1)
+python3 tools/gate.py out/sweep-v2.1/summary.json     # PASS_WITHIN_SCOPE (exit 0)
 python3 tools/report.py out                           # adds the many-laps charts
 ```
 
-GitHub runs the same checks on every push (`.github/workflows/shadow-gate.yml`)
-and posts both verdicts in the job summary. Add `--strict` to make a rejection
-fail the build.
+The gate has three verdicts: **PASS_WITHIN_SCOPE**, **FAIL**, and **INVALID**
+(missing or inconsistent evidence, the wrong number of laps or frames,
+missing candidate answers, or v1 itself breaking a limit). Anything but a
+pass exits 1. It writes `manifest.json` beside the summary: lap-file and tool
+hashes, seed, ranges, git commit. `python3 tests/test_gate.py` feeds it 18
+broken, incomplete and unsafe summaries to prove it fails closed.
 
-Run the live system with the fixed candidate or different conditions:
-`CANDIDATE=v2.1 sh scripts/run_demo.sh shadow out` or
+GitHub runs all of this on every push (`.github/workflows/shadow-gate.yml`)
+and requires v2 and v3 to FAIL and v2.1 to pass, so CI also proves the gate
+can reject a bad candidate.
+
+Run the live system with another candidate or different conditions:
+`CANDIDATE=v3 sh scripts/run_demo.sh shadow out` or
 `PLANT_ARGS="--laps 3 --ambient 40 --grip 0.9" sh scripts/run_demo.sh shadow out`.
 
 **The dashboard (recommended):**
@@ -206,8 +281,8 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
 
 | Path | What |
 |---|---|
-| `include/bbw.h` | messages, never-blocking ring buffer, shared regions |
-| `include/control.h`, `src/control.c` | car limits (battery, motor torque and heat, grip, wings), v1, v2 and v2.1, disagreement rules |
+| `include/bbw.h` | messages, never-blocking rings (including the read-only broadcast ring), shared regions |
+| `include/control.h`, `src/control.c` | car limits (battery, motor torque and heat, grip, wings), v1, v2, v2.1 and v3, the absolute limit checks |
 | `include/vehicle.h`, `src/vehicle.c` | the simulated car, shared by the live plant and the sweep |
 | `src/sweep.c` | `bbw_sweep`: hundreds of laps in varied conditions, in seconds |
 | `tools/gate.py`, `.github/workflows/` | release verdict, and GitHub checks on every push |
@@ -216,21 +291,42 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
 | `src/v1.c`, `src/v2.c` | the two controllers; v2 has built-in fault injection |
 | `src/comparer.c` | joins v1/v2 per frame, writes the evidence |
 | `src/hog.c` | CPU burner for the flood test |
-| `scripts/run_demo.sh` | the seven scenarios |
+| `scripts/run_demo.sh` | the seven scenarios (attack = seven routes, each reported) |
 | `tools/` | live dashboard, real-lap import (`fetch_openf1_lap.py`), lap from video (`lapgen.py`), synthetic lap, FastF1 import, HTML report, AI analyst, QNX live link |
-| `tests/` | ring buffer stress test, strategy tests |
+| `tests/` | ring stress tests (including torn-read checks), strategy and limit-check tests, the gate's fail-closed tests |
 
 ## Honest limits
 
-- Battery, motor, wings and forces are a small illustrative model (`include/control.h`).
-  The lap only provides speed, throttle and a brake on/off flag.
-- Shadow mode is open-loop: v2 sees a battery shaped by v1's choices.
-- F1 cars use a standard control unit; this is a development and test-rig tool.
-  The same approach applies to any EV or hybrid with blended braking.
-- Verified on QNX 8.0 (QEMU): the actuator resource manager, real-time
-  priorities, CPU pinning and running v2 as another user. Not yet run: the
-  security-policy steps (docs/security-policy.md) and real hardware (Raspberry Pi).
-- The AI analyst's checker is tested; a review from a real model is not yet in the repo.
+- **A model, not a car.** Battery, motor, wings, grip and forces are a small
+  illustrative model (`include/control.h`). The lap gives speed, throttle, a
+  brake on/off flag and position at about 3.7 Hz, interpolated to 100 Hz.
+  The car's speed follows the recorded lap whatever the controllers do
+  (kinematic replay): the controllers decide only the rear motor/disc split.
+- **Seeded flaws.** v2's and v3's flaws were written on purpose by the same
+  people who wrote the checks, so catching them shows the pipeline works, not
+  that it finds unknown bugs. Blind fault injection (flaws written by someone
+  else) is the next test.
+- **Checks cover rear lock, braking demand, battery, lap energy and motor
+  heat.** Not modelled: yaw and stability, left/right asymmetry, ABS/ESC
+  interaction, actuator rate limits, sensor faults, wet tracks.
+- **Open-loop by nature.** In shadow mode v2 sees the car v1 drives; the
+  counterfactual sweep is a first answer to that, using the same model.
+- **The deadline-miss fallback is illustrative**: discs only, capped at 95% of
+  rear grip. A real car's degraded mode comes from its own hazard analysis.
+- **QNX SDP 8.0 in QEMU, not QNX OS for Safety on real hardware.** Nothing
+  here is ISO 26262 certified. Verified in QEMU: the actuator resource
+  manager, real-time priorities, CPU pinning, v2 as another user. Not yet
+  run: the security-policy steps and real hardware (Raspberry Pi).
+- **One known open route**: on QNX an unprivileged v2 can probably raise its
+  priority above v1's (see the attack test above). Fix: adaptive partitioning
+  or a security policy.
+- **Shadow mode is not new.** The contribution is the QNX implementation, the
+  isolation tests, the absolute checks and the fail-closed gate.
+- **Data licence.** OpenF1 is unofficial and for non-commercial use; the lap
+  data is downloaded by the user and not stored in this repo. F1 and related
+  marks belong to Formula One Licensing B.V.
+- The AI analyst only explains evidence; it never decides a verdict. Its
+  number checker is tested; a review from a real model is not yet in the repo.
 
 ## License
 

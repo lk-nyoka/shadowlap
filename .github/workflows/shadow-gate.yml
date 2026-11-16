@@ -1,5 +1,6 @@
-# Every push: build, run the tests, then run the shadow evidence and post a
-# release verdict for v2 in the job summary. Free on public repositories.
+# Every push: build, run the tests (including the gate's fail-closed tests),
+# then run the shadow evidence and post a verdict per candidate in the job
+# summary, with a manifest (hashes, seed, commit). Free on public repositories.
 name: shadow-gate
 
 on:
@@ -28,23 +29,32 @@ jobs:
         run: pip install numpy matplotlib
       - name: Build
         run: make
-      - name: Many-lap sweep, candidate v2 (300 laps, varied battery, heat and grip)
-        run: build/host/bbw_sweep --lap data/lap_a.csv --runs 100 --laps 3 --seed 1 --out out/sweep
-      - name: Many-lap sweep, candidate v2.1 (the fixed version)
-        run: build/host/bbw_sweep --lap data/lap_a.csv --runs 100 --laps 3 --seed 1 --candidate v2.1 --out out/sweep-v2.1
-      - name: Live shadow run (20 s, real processes and timing)
+      - name: Many-lap sweeps (300 laps each, varied battery, heat and grip)
+        run: |
+          for c in v2 v2.1 v3; do
+            build/host/bbw_sweep --lap data/lap_a.csv --runs 100 --laps 3 --seed 1 --candidate $c --out out/sweep-$c
+          done
+          build/host/bbw_sweep --lap data/lap_a.csv --runs 100 --laps 3 --seed 1 --candidate v2.1 \
+            --mode counterfactual --out out/sweep-v2.1-cf
+          cp -r out/sweep-v2 out/sweep
+      - name: Live shadow run (20 s, real processes; not real-time on a shared CI runner)
         run: SECONDS_MAX=20 sh scripts/run_demo.sh shadow out
       - name: Report
         run: python3 tools/report.py out
-      - name: Verdict for v2
-        run: python3 tools/gate.py out/sweep/summary.json
-      - name: Verdict for v2.1
-        run: python3 tools/gate.py out/sweep-v2.1/summary.json
+      # The gate fails closed (exit 1 unless PASS_WITHIN_SCOPE). Here CI also
+      # proves the gate works: known-bad candidates must FAIL, the fixed one must pass.
+      - name: Verdict v2 (must be rejected)
+        run: python3 tools/gate.py out/sweep-v2/summary.json --expect FAIL
+      - name: Verdict v3 (must be rejected)
+        run: python3 tools/gate.py out/sweep-v3/summary.json --expect FAIL
+      - name: Verdict v2.1 (must pass this campaign, shadow and counterfactual)
+        run: |
+          python3 tools/gate.py out/sweep-v2.1/summary.json
+          python3 tools/gate.py out/sweep-v2.1-cf/summary.json
       - uses: actions/upload-artifact@v4
         with:
           name: shadow-evidence
           path: |
             out/report.html
-            out/sweep/
-            out/sweep-v2.1/
+            out/sweep-*/
             out/shadow/summary.json

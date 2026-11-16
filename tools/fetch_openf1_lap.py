@@ -14,8 +14,11 @@ and a .json with what the lap is. Public timing data is sampled about
 What is real: speed, throttle, brake on/off, track position, lap time.
 What is modelled: everything inside the car (battery, motor, brake forces).
 
-The fetched files are not committed to the repo (see .gitignore): check
-OpenF1's terms before sharing them. https://openf1.org
+Data via OpenF1 (https://openf1.org), an unofficial project not associated
+with the Formula 1 companies, intended for education, research and
+non-commercial use. F1 and related marks are trademarks of Formula One
+Licensing B.V. The fetched files are not committed to this repo (see
+.gitignore); each user downloads their own copy.
 """
 import argparse
 import datetime as dt
@@ -105,13 +108,15 @@ def main():
             fp.write("%.3f,%.1f,%.2f,%.2f,%d,%d,%.0f,%.0f\n" % row)
     m, sec = divmod(dur, 60)
     meta = {"label": f"Real lap: {a.circuit} {a.year} {a.session}, car {drv}, {int(m)}:{sec:06.3f}",
-            "source": "OpenF1 (public timing data)", "session_key": key, "driver_number": drv,
+            "source": "OpenF1 (unofficial, non-commercial use; https://openf1.org)",
+            "sampling": "about 3.7 Hz, interpolated to 100 Hz; speed smoothed over 250 ms", "session_key": key, "driver_number": drv,
             "lap_number": best.get("lap_number"), "lap_time_s": dur, "circuit": a.circuit, "year": a.year,
             "real": ["speed", "throttle", "brake on/off", "track position", "lap time"],
             "modelled": ["battery", "motor", "brake forces", "wings", "grip"]}
     json.dump(meta, open(out[:-4] + ".json", "w"), indent=1)
     print(f"wrote {out}: {meta['label']}, {len(car)} telemetry samples -> {len(t)} at 100 Hz, "
           f"{z + 1} braking zones, top {spd.max():.0f} km/h")
+    print("Data via OpenF1 (unofficial; non-commercial use). F1 marks belong to Formula One Licensing B.V.")
 
 
 if __name__ == "__main__":

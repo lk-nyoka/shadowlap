@@ -76,6 +76,8 @@ def build_evidence(run):
             item.update(lap_harvest_used_MJ=round(e["harvest"], 2), v2_max_charge_kW=round(e["p2max"]))
         elif e["cls"] == "over_motor":
             item.update(v2_max_charge_kW=round(e["p2max"]))
+        elif e["cls"] == "demand_not_met":
+            item.update(rear_asked_kN=round(e["req"] / 1e3, 1), v2_rear_delivered_kN=round(e["v2short"] / 1e3, 1))
         out.append(item)
     counts = {}
     for c in d["class"]:
@@ -84,7 +86,8 @@ def build_evidence(run):
     sp = os.path.join(os.path.dirname(os.path.normpath(run)), "sweep", "summary.json")
     if os.path.exists(sp):
         sm = json.load(open(sp))
-        many = {k: sm.get(k) for k in ("laps", "laps_with_unsafe_v2", "laps_with_lock_while_wings_close",
+        many = {k: sm.get(k) for k in ("candidate", "mode", "laps", "laps_with_unsafe_v2", "laps_with_hard_limit_break",
+                                       "laps_with_demand_not_met", "v1_limit_break_frames", "laps_with_lock_while_wings_close",
                                        "laps_with_lock_low_grip", "laps_with_hot_motor_overreach",
                                        "v1_harvest_mj_per_lap", "v2_safe_harvest_mj_per_lap")}
     return {

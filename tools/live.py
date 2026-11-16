@@ -42,7 +42,7 @@ FIELDS = ["seq", "t_lap", "zone", "v_kmh", "soc", "lap_harvest_mj", "v1_regen", 
           "v1_latency_us", "v2_present", "v2_regen", "class", "f_rear_grip", "plant_lag_us",
           "v1_friction", "v2_friction", "f_rear_req", "a_req", "brake", "motor_temp_c", "wing_closed"]
 SCENARIOS = ["shadow", "crash", "freeze", "sigstop", "flood", "attack", "baseline"]
-CANDIDATES = ["v2", "v2.1"]
+CANDIDATES = ["v2", "v2.1", "v3"]
 # Track conditions for a live lap. Fixed list, so nothing typed in the browser reaches a shell.
 CONDITIONS = {
     "normal": ("Normal day: full grip, 30 °C, battery 80%", "--grip 1.0 --ambient 30 --soc0 0.80"),
@@ -450,7 +450,7 @@ canvas{width:100%;display:block}
   <select id="target" title="where to run"><option value="local">This PC</option><option value="qnx">QNX</option></select>
   <select id="scen" title="scenario"></select>
   <select id="cond" title="track conditions"><option value="normal">Normal day</option><option value="worn">Worn tyres (90% grip)</option><option value="hot">Hot day (42 °C)</option><option value="tough">Hot day + worn tyres</option></select>
-  <select id="cand" title="candidate brake software"><option value="v2">candidate v2</option><option value="v2.1">candidate v2.1 (fixed)</option></select>
+  <select id="cand" title="candidate brake software"><option value="v2">candidate v2</option><option value="v2.1">candidate v2.1 (fixed)</option><option value="v3">candidate v3 (blending)</option></select>
   <button id="start">Start lap</button><button id="stop" class="ghost" disabled>Stop</button>
  </div></header>
 <div class="stats">
@@ -464,7 +464,8 @@ canvas{width:100%;display:block}
 </div>
 <div class="top">
  <div class="card"><h2 id="maph">The car on track</h2><canvas id="map" height="300"></canvas>
-  <div class="legend"><span><i style="background:#ececea"></i>track</span><span><i style="background:#ff6b3d"></i>braking zones</span><span><i style="background:#3ecf8e;height:8px;width:8px;border-radius:50%"></i>the car now</span><span>dots on the track: where v2 got it wrong</span></div></div>
+  <div class="legend"><span><i style="background:#ececea"></i>track</span><span><i style="background:#ff6b3d"></i>braking zones</span><span><i style="background:#3ecf8e;height:8px;width:8px;border-radius:50%"></i>the car now</span><span>dots on the track: where the candidate broke a limit</span></div>
+  <div class="legend" style="margin-top:4px"><span>Lap data: OpenF1 (unofficial, non-commercial). Speeds and positions are real; forces, battery and motor are modelled.</span></div></div>
  <div class="card"><h2>Rear brakes right now</h2>
   <div id="story" class="story">Press Start lap, or play a video, to begin.</div>
   <div class="split"><div class="lbl">Driver asks the rear for</div><div class="val" id="b_req">-</div></div>
@@ -477,7 +478,7 @@ canvas{width:100%;display:block}
 <div class="grid">
  <div>
   <div class="card"><h2>Speed, coloured where v2 disagrees</h2><canvas id="c1" height="200"></canvas>
-   <div class="legend"><span><i style="background:#ff4d4d"></i>rear lock risk</span><span><i style="background:#f5b13d"></i>over battery</span><span><i style="background:#9b8cff"></i>over lap cap</span><span><i style="background:#e05fa0"></i>hot motor</span><span><i style="background:#5aa9e6"></i>different, within limits</span><span><i style="background:#555"></i>v2 not answering</span></div></div>
+   <div class="legend"><span><i style="background:#ff4d4d"></i>rear lock risk</span><span><i style="background:#f5b13d"></i>over battery</span><span><i style="background:#9b8cff"></i>over lap cap</span><span><i style="background:#e05fa0"></i>hot motor</span><span><i style="background:#4f8fe0"></i>braking demand not met</span><span><i style="background:#5aa9e6"></i>different, within limits</span><span><i style="background:#555"></i>v2 not answering</span></div></div>
   <div class="card" style="margin-top:16px"><h2>Motor harvesting, kW</h2><canvas id="c2" height="170"></canvas>
    <div class="legend"><span><i style="background:var(--v1)"></i>v1 (applied to the car)</span><span><i style="background:var(--v2)"></i>v2 (proposed only)</span></div></div>
   <div class="card" style="margin-top:16px"><h2>v1 frame-to-command time (log scale)</h2><canvas id="c3" height="150"></canvas>
@@ -501,8 +502,8 @@ canvas{width:100%;display:block}
 </div>
 <div class="foot">Battery, motor and forces are a simulated model; with a calibrated lap the braking timing comes from the video and the speeds are modelled. v2's decisions are never applied to the car.</div>
 <script>
-const COL={rear_lock_risk:'#ff4d4d',over_battery:'#f5b13d',over_lap_cap:'#9b8cff',over_motor:'#e05fa0',within_limits:'#5aa9e6',shadow_missing:'#555'};
-const TXT={rear_lock_risk:'asked the rear tyres for more grip than they had',over_battery:'tried to charge harder than the nearly full battery accepts',over_lap_cap:'kept harvesting after the lap energy limit',over_motor:'asked a hot motor for more braking than it could safely give',within_limits:'chose a different split, within limits',shadow_missing:'stopped answering (crashed, frozen or behind)'};
+const COL={rear_lock_risk:'#ff4d4d',over_battery:'#f5b13d',over_lap_cap:'#9b8cff',over_motor:'#e05fa0',demand_not_met:'#4f8fe0',within_limits:'#5aa9e6',shadow_missing:'#555'};
+const TXT={rear_lock_risk:'asked the rear tyres for more grip than they had',over_battery:'tried to charge harder than the nearly full battery accepts',over_lap_cap:'kept harvesting after the lap energy limit',over_motor:'asked a hot motor for more braking than it could safely give',demand_not_met:'braked less than the driver asked, though the tyres had grip to spare',within_limits:'chose a different split, within limits',shadow_missing:'stopped answering (crashed, frozen or behind)'};
 const $=id=>document.getElementById(id);
 let R=[],misses=0,ovr=0,seen=new Set(),lastCls='agree',dirty=true,lastRowWall=0,lapDur=90,laps=[],run={running:false};
 /* ---------- data ---------- */
@@ -545,7 +546,7 @@ requestAnimationFrame(draw);addEventListener('resize',()=>{dirty=true});
 let geo=null,geoName=null;
 async function loadGeo(name){if(!name||name===geoName)return;geoName=name;
  try{const r=await fetch('/api/lapgeo?lap='+encodeURIComponent(name));geo=r.ok?await r.json():null}catch(e){geo=null}
- $('maph').textContent=geo?(geo.real?'The car on track (real position data)':'The car on track (schematic: this lap has no position data)'):'The car on track'}
+ $('maph').textContent=geo?(geo.real?'The car on track (real position data, ~4 samples/s, interpolated)':'The car on track (schematic: this lap has no position data)'):'The car on track'}
 function geoAt(t){if(!geo)return null;const T=geo.t;let lo=0,hi=T.length-1;if(t<=T[0])return 0;if(t>=T[hi])return hi;
  while(hi-lo>1){const m=(lo+hi)>>1;if(T[m]<=t)lo=m;else hi=m}return lo}
 function drawMap(){const c=$('map');let [g,w,h]=setup(c);if(!geo){g.fillStyle='#8b8b90';g.font='13px system-ui';g.fillText('Pick a lap to see the track.',16,30);return}
@@ -570,7 +571,8 @@ function story(o){if(!o.brk||o.req<1){return `On the throttle at <b>${o.v.toFixe
   case 'rear_lock_risk':return base+'<span style="color:var(--bad)">v2 would ask the rear tyres for more than they can grip: the rear wheels could lock.</span> v1 stays under the limit.';
   case 'over_battery':return base+'<span style="color:var(--warn)">v2 would charge the nearly full battery harder than it can take.</span> v1 eases off.';
   case 'over_lap_cap':return base+'<span style="color:#9b8cff">v2 keeps harvesting after the lap\'s energy limit is used up.</span> v1 stops.';
-  case 'over_motor':return base+'<span style="color:#e05fa0">The motor is hot; v2 still asks it for full braking.</span> v1 backs off.';}
+  case 'over_motor':return base+'<span style="color:#e05fa0">The motor is hot; v2 still asks it for full braking.</span> v1 backs off.';
+  case 'demand_not_met':return base+'<span style="color:#4f8fe0">The candidate brakes less than the driver asked: the motor may not charge here and the discs are not told to make up the difference.</span> v1 delivers the full request.';}
  return base}
 function drawNow(){drawMap();if(!R.length)return;const t=lapT();let o=R[R.length-1];
  if(t!==null&&o.t>t){for(let i=R.length-1;i>=0;i--){if(R[i].t<=t){o=R[i];break}}}

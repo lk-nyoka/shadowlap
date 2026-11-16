@@ -25,9 +25,10 @@
 #define BBW_DT            (1.0 / BBW_HZ)
 
 /* ---------- shared-memory object names ---------- */
-#define BBW_SHM_PROD    "/bbw_prod"    /* plant <-> v1 only            (mode 0600) */
-#define BBW_SHM_SHADOW  "/bbw_shadow"  /* plant -> v2 -> comparer      (mode 0666) */
-#define BBW_SHM_REC     "/bbw_rec"     /* plant -> comparer            (mode 0600) */
+#define BBW_SHM_PROD    "/bbw_prod"    /* plant <-> v1 only                     (mode 0600) */
+#define BBW_SHM_SHIN    "/bbw_shin"    /* plant -> v2: v2 maps it READ-ONLY     (mode 0644) */
+#define BBW_SHM_SHOUT   "/bbw_shout"   /* v2 -> comparer: untrusted, validated  (mode 0666) */
+#define BBW_SHM_REC     "/bbw_rec"     /* plant -> comparer                     (mode 0600) */
 #define BBW_MAGIC       0x42425731u    /* "BBW1" */
 
 /* ---------- actuator path ---------- */
@@ -125,8 +126,49 @@ static inline void NAME##_skip_to_head(NAME##_t *r) {                         \
     atomic_store_explicit(&r->tail, h, memory_order_release);                 \
 }
 
-BBW_DEFINE_RING(frame_ring, bbw_frame_t)
 BBW_DEFINE_RING(cmd_ring, bbw_cmd_t)
+
+/* ---------- broadcast ring: plant -> v2, v2 can only READ it ----------
+ * The plant overwrites old slots and never learns whether v2 kept up, so
+ * nothing v2 does (slow, frozen, malicious) can reach back to the plant.
+ * Each slot carries its own sequence lock so a reader can tell when a slot
+ * was overwritten while it was copying (it then counts the frame as lost). */
+typedef struct {
+    _Atomic uint64_t lock;      /* even = stable, odd = being written */
+    bbw_frame_t      f;
+} bbw_bslot_t;
+
+typedef struct {
+    _Atomic uint64_t head;      /* frames published so far */
+    bbw_bslot_t      slot[BBW_RING_N];
+} bcast_ring_t;
+
+static inline void bcast_publish(bcast_ring_t *r, const bbw_frame_t *f) {
+    uint64_t h = atomic_load_explicit(&r->head, memory_order_relaxed);
+    bbw_bslot_t *s = &r->slot[h & (BBW_RING_N - 1)];
+    uint64_t l = atomic_load_explicit(&s->lock, memory_order_relaxed);
+    atomic_store_explicit(&s->lock, l + 1, memory_order_relaxed);
+    atomic_thread_fence(memory_order_release);
+    s->f = *f;
+    atomic_store_explicit(&s->lock, l + 2, memory_order_release);
+    atomic_store_explicit(&r->head, h + 1, memory_order_release);
+}
+
+/* Read frame number idx. Returns 1 ok, 0 not published yet, -1 lost
+ * (overwritten before or while it was read). */
+static inline int bcast_read(const bcast_ring_t *r, uint64_t idx, bbw_frame_t *out) {
+    uint64_t h = atomic_load_explicit(&((bcast_ring_t *)r)->head, memory_order_acquire);
+    if (idx >= h) return 0;
+    if (h - idx > BBW_RING_N) return -1;
+    const bbw_bslot_t *s = &r->slot[idx & (BBW_RING_N - 1)];
+    uint64_t l1 = atomic_load_explicit(&((bbw_bslot_t *)s)->lock, memory_order_acquire);
+    if (l1 & 1) return -1;
+    *out = s->f;
+    atomic_thread_fence(memory_order_acquire);
+    uint64_t l2 = atomic_load_explicit(&((bbw_bslot_t *)s)->lock, memory_order_relaxed);
+    if (l1 != l2 || out->seq != idx) return -1;
+    return 1;
+}
 BBW_DEFINE_RING(rec_ring, bbw_record_t)
 
 /* ---------- shared regions ---------- */
@@ -138,32 +180,51 @@ typedef struct {
     _Atomic uint64_t seqlock;        /* even = stable, odd = being written */
     bbw_frame_t      latest;
     _Atomic int32_t  plant_running;
+    _Atomic int32_t  v1_rt_ok;       /* 0 unknown, 1 real-time set up, -1 failed */
 } bbw_prod_t;
 
-/* Shadow region: the only thing v2 can see. */
+/* Shadow input: written by the plant, mapped read-only by v2. No semaphore:
+ * v2 polls, because waiting on a semaphore would need write access. */
 typedef struct {
     uint32_t         magic;
-    sem_t            frame_ready;    /* plant posts, never waits */
     _Atomic int32_t  plant_running;
+    bcast_ring_t     in;
+} bbw_shin_t;
+
+/* Shadow output: written by v2, read by the comparer. Everything in here is
+ * untrusted: the comparer checks it before using it. */
+typedef struct {
+    uint32_t         magic;
     _Atomic int64_t  v2_heartbeat_ns;
-    frame_ring_t     in;             /* plant -> v2 */
-    cmd_ring_t       out;            /* v2 -> comparer */
-} bbw_shadow_t;
+    _Atomic uint64_t v2_lost;        /* frames v2 says it lost (informational only) */
+    cmd_ring_t       out;
+} bbw_shout_t;
 
 /* Record region: plant -> comparer. */
 typedef struct {
     uint32_t         magic;
     _Atomic int32_t  plant_running;
     _Atomic int32_t  run_done;
+    int32_t          plant_rt_ok;    /* filled in before run_done */
+    int32_t          v1_rt_ok;
+    uint64_t         actuator_rejects;
+    uint64_t         fallbacks;
     rec_ring_t       cycles;
 } bbw_rec_t;
 
 /* ---------- common helpers (common.c) ---------- */
 int64_t bbw_now_ns(void);
 void    bbw_sleep_until_ns(int64_t t_ns);
-void    bbw_rt_setup(const char *who, int prio, int cpu);
+/* Real-time setup for the calling thread (+ memory lock once per process).
+ * Returns 1 if everything asked for was set, 0 if not. With BBW_REQUIRE_RT=1
+ * in the environment a failure ends the process (exit 3): a timing run that
+ * did not get real-time scheduling must not produce a result. */
+int     bbw_rt_setup(const char *who, int prio, int cpu);
+/* Re-apply the same priority and CPU to a thread the process created later. */
+int     bbw_rt_setup_thread(const char *who);
 void   *bbw_shm_create(const char *name, size_t size, int mode);
 void   *bbw_shm_open(const char *name, size_t size, int wait_ms);
+const void *bbw_shm_open_ro(const char *name, size_t size, int wait_ms);
 void    bbw_shm_unlink_all(void);
 void    bbw_seqlock_write(bbw_prod_t *p, const bbw_frame_t *f);
 void    bbw_seqlock_read(bbw_prod_t *p, bbw_frame_t *out);
@@ -176,6 +237,7 @@ int     bbw_arg_flag(int argc, char **argv, const char *key);
 /* plant side: start the actuator service; incoming commands land in *slot */
 int  bbw_actuator_serve_start(void);
 int  bbw_actuator_latest(bbw_cmd_t *out, int64_t *recv_ns);
+uint64_t bbw_actuator_rejects(void);          /* commands refused as invalid */
 void bbw_actuator_serve_stop(void);
 /* controller side */
 int  bbw_actuator_open(void);                 /* returns fd or -1 (errno set) */

@@ -26,32 +26,64 @@ void bbw_sleep_until_ns(int64_t t_ns) {
     while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR) { }
 }
 
-/* Give this thread a fixed real-time priority and optionally pin it to one CPU.
- * Failure is reported but not fatal, so the demo still runs as a normal user. */
-void bbw_rt_setup(const char *who, int prio, int cpu) {
+/* Real-time setup. Failure is reported; with BBW_REQUIRE_RT=1 it is fatal,
+ * so a timing test can never quietly run without real-time scheduling. */
+static int g_rt_prio = 0, g_rt_cpu = -1;
+
+static int rt_fail(const char *who, const char *what, int err) {
+    const char *req = getenv("BBW_REQUIRE_RT");
+    int required = req && req[0] == '1';
+    fprintf(stderr, "[%s] %s: %s not set (%s)\n", who, required ? "ERROR" : "warning", what, strerror(err));
+    if (required) {
+        fprintf(stderr, "[%s] BBW_REQUIRE_RT=1: refusing to run without real-time scheduling\n", who);
+        exit(3);
+    }
+    return 0;
+}
+
+static int rt_thread(const char *who, int prio, int cpu) {
+    int ok = 1;
     if (prio > 0) {
         struct sched_param sp = { .sched_priority = prio };
         int rc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
-        if (rc != 0)
-            fprintf(stderr, "[%s] warning: SCHED_FIFO %d not set (%s); running at normal priority\n",
-                    who, prio, strerror(rc));
+        if (rc != 0) ok = rt_fail(who, "SCHED_FIFO priority", rc);
+        else {                                   /* verify, do not assume */
+            int pol = 0; struct sched_param got;
+            if (pthread_getschedparam(pthread_self(), &pol, &got) != 0 || pol != SCHED_FIFO ||
+                got.sched_priority != prio)
+                ok = rt_fail(who, "SCHED_FIFO priority (verify)", EINVAL);
+        }
     }
     if (cpu >= 0) {
 #ifdef __QNX__
+        /* _NTO_TCTL_RUNMASK pins the CALLING thread only; every thread that
+         * matters calls this (see bbw_rt_setup_thread), so none is left floating */
         unsigned runmask = 1u << cpu;
         if (ThreadCtl(_NTO_TCTL_RUNMASK, (void *)(uintptr_t)runmask) == -1)
-            fprintf(stderr, "[%s] warning: runmask cpu %d not set (%s)\n", who, cpu, strerror(errno));
+            ok = rt_fail(who, "CPU runmask", errno);
 #elif defined(__linux__)
         cpu_set_t set;
         CPU_ZERO(&set);
         CPU_SET(cpu, &set);
-        if (sched_setaffinity(0, sizeof set, &set) != 0)
-            fprintf(stderr, "[%s] warning: affinity cpu %d not set (%s)\n", who, cpu, strerror(errno));
+        if (sched_setaffinity(0, sizeof set, &set) != 0)     /* 0 = calling thread */
+            ok = rt_fail(who, "CPU affinity", errno);
 #endif
     }
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0 && prio > 0)
-        fprintf(stderr, "[%s] note: mlockall failed (%s)\n", who, strerror(errno));
+    return ok;
 }
+
+int bbw_rt_setup(const char *who, int prio, int cpu) {
+    g_rt_prio = prio;
+    g_rt_cpu = cpu;
+    int ok = rt_thread(who, prio, cpu);
+    if (prio > 0 && mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
+        ok = rt_fail(who, "mlockall (memory lock)", errno) && ok;
+    if (ok && (prio > 0 || cpu >= 0))
+        fprintf(stderr, "[%s] real-time: SCHED_FIFO %d, cpu %d, memory locked\n", who, prio, cpu);
+    return ok;
+}
+
+int bbw_rt_setup_thread(const char *who) { return rt_thread(who, g_rt_prio, g_rt_cpu); }
 
 void *bbw_shm_create(const char *name, size_t size, int mode) {
     shm_unlink(name);
@@ -91,9 +123,34 @@ void *bbw_shm_open(const char *name, size_t size, int wait_ms) {
     return p;
 }
 
+/* Open a region the caller may only READ: O_RDONLY + PROT_READ, so even a
+ * buggy or hostile reader cannot change it (and the OS refuses O_RDWR to
+ * other users because of the 0644 mode). */
+const void *bbw_shm_open_ro(const char *name, size_t size, int wait_ms) {
+    int fd = -1;
+    for (int waited = 0;; waited += 50) {
+        fd = shm_open(name, O_RDONLY, 0);
+        if (fd >= 0) break;
+        if (errno != ENOENT || waited >= wait_ms) return NULL;
+        usleep(50000);
+    }
+    struct stat st;
+    for (int i = 0; i < 100; i++) {
+        if (fstat(fd, &st) == 0 && (size_t)st.st_size >= size) break;
+        usleep(10000);
+    }
+    void *p = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+    int e = errno;
+    close(fd);
+    if (p == MAP_FAILED) { errno = e; return NULL; }
+    for (int i = 0; i < 200 && *(volatile const uint32_t *)p != BBW_MAGIC; i++) usleep(10000);
+    return p;
+}
+
 void bbw_shm_unlink_all(void) {
     shm_unlink(BBW_SHM_PROD);
-    shm_unlink(BBW_SHM_SHADOW);
+    shm_unlink(BBW_SHM_SHIN);
+    shm_unlink(BBW_SHM_SHOUT);
     shm_unlink(BBW_SHM_REC);
 }
 
