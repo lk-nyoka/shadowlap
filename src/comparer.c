@@ -51,7 +51,8 @@ int main(int argc, char **argv) {
     if (!csv) { perror(path); return 1; }
     fprintf(csv, "seq,t_lap,dist_m,zone,v_kmh,brake,a_req,soc,lap_harvest_mj,f_rear_req,f_rear_grip,"
                  "v1_regen,v1_friction,v1_applied,v1_clamped,v1_latency_us,p_regen_kw,"
-                 "v2_present,v2_regen,v2_friction,delta_regen,class,shadow_dropped,plant_lag_us,motor_temp_c,wing_closed\n");
+                 "v2_present,v2_regen,v2_friction,delta_regen,class,shadow_dropped,plant_lag_us,motor_temp_c,wing_closed,"
+                 "v2_extra_kmh\n");
 
     slot_t *tab = calloc(TAB_N, sizeof *tab);
     bbw_record_t *pend = malloc(TAB_N * sizeof *pend);
@@ -63,6 +64,7 @@ int main(int argc, char **argv) {
     uint64_t rows = 0, misses = 0, clamps = 0, overruns = 0, count[DIS_N] = {0};
     uint64_t missing = 0, bad_v2 = 0, v1_hz[DIS_N] = {0}, v1_hz_total = 0;
     double v1_peak_grip = 0, v2_peak_grip = 0;
+    mon_shortfall_t sh_v1 = {0}, sh_v2 = {0};
     fprintf(stderr, "[comparer] writing %s\n", path);
 
     for (;;) {
@@ -98,6 +100,8 @@ int main(int argc, char **argv) {
             count[cls]++;
             if (!present) missing++;
             /* the same absolute checks on what v1 actually did */
+            mon_shortfall_update(&sh_v1, &p->f, &p->cmd);
+            if (present) mon_shortfall_update(&sh_v2, &p->f, &s->c);
             int h1 = hazard(&p->f, &p->cmd);
             if (h1 != DIS_NONE) { v1_hz[h1]++; v1_hz_total++; }
             if (p->f.brake) {
@@ -113,7 +117,7 @@ int main(int argc, char **argv) {
                 lat[lat_n++] = p->latency_ns;
             }
             fprintf(csv, "%llu,%.3f,%.1f,%d,%.2f,%d,%.3f,%.4f,%.4f,%.1f,%.1f,"
-                         "%.1f,%.1f,%d,%d,%.1f,%.2f,%d,%.1f,%.1f,%.1f,%s,%llu,%.1f,%.1f,%.2f\n",
+                         "%.1f,%.1f,%d,%d,%.1f,%.2f,%d,%.1f,%.1f,%.1f,%s,%llu,%.1f,%.1f,%.2f,%.2f\n",
                     (unsigned long long)p->f.seq, p->f.t_lap, p->f.dist_m, p->f.zone, p->f.v * 3.6,
                     p->f.brake, p->f.a_req, p->f.soc, p->f.lap_harvest_j / 1e6,
                     p->f.f_rear_req, p->f.f_rear_grip,
@@ -122,7 +126,7 @@ int main(int argc, char **argv) {
                     present, present ? s->c.f_regen : 0.0, present ? s->c.f_friction : 0.0,
                     present ? s->c.f_regen - p->cmd.f_regen : 0.0, dis_name(cls),
                     (unsigned long long)missing, (double)p->plant_lag_ns / 1000.0,
-                    p->f.motor_temp_c, p->f.wing_closed);
+                    p->f.motor_temp_c, p->f.wing_closed, sh_v2.dv * 3.6);
             s->have = 0;
             pt++;
             rows++;
@@ -154,13 +158,15 @@ int main(int argc, char **argv) {
                     "  \"shadow_frames_dropped\": %llu,\n  \"v2_coverage\": %.5f,\n  \"v2_invalid_outputs\": %llu,\n"
                     "  \"actuator_rejects\": %llu,\n  \"fallbacks\": %llu,\n"
                     "  \"realtime\": {\"plant\": %s, \"v1\": %s},\n"
-                    "  \"peak_rear_grip_use\": {\"v1\": %.3f, \"v2\": %.3f},\n  \"classes\": {",
+                    "  \"peak_rear_grip_use\": {\"v1\": %.3f, \"v2\": %.3f},\n"
+                    "  \"worst_extra_speed_kmh\": {\"v1\": %.2f, \"v2\": %.2f},\n"
+                    "  \"worst_extra_distance_m\": {\"v1\": %.2f, \"v2\": %.2f},\n  \"classes\": {",
                 (unsigned long long)rows, (unsigned long long)misses, (unsigned long long)overruns,
                 (unsigned long long)clamps, PCT(0.50), PCT(0.99), PCT(0.999), lat_n ? (double)lat[lat_n - 1] / 1000.0 : -1.0,
                 (unsigned long long)missing, coverage, (unsigned long long)bad_v2,
                 (unsigned long long)rec->actuator_rejects, (unsigned long long)rec->fallbacks,
                 rec->plant_rt_ok == 1 ? "true" : "false", rec->v1_rt_ok == 1 ? "true" : "false",
-                v1_peak_grip, v2_peak_grip);
+                v1_peak_grip, v2_peak_grip, sh_v1.worst_kmh, sh_v2.worst_kmh, sh_v1.worst_m, sh_v2.worst_m);
         for (int i = 0; i < DIS_N; i++)
             fprintf(js, "%s\"%s\": %llu", i ? ", " : "", dis_name(i), (unsigned long long)count[i]);
         fprintf(js, "},\n  \"v1_limit_breaks\": {");

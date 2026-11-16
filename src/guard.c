@@ -44,10 +44,17 @@ int main(int argc, char **argv) {
     int64_t used[MAXS], at[MAXS];
     int k = 0, filled = 0;
     double peak = 0;
+    int64_t onset = 0, last_cpu = -1, last_at = 0;   /* when the candidate started running hot */
     for (;;) {
         struct timespec ts;
         if (clock_gettime(cid, &ts) != 0 || kill(pid, 0) != 0) break;   /* candidate has gone */
         int64_t now = bbw_now_ns(), cpu_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        /* usage over the last period alone: marks the moment it started burning */
+        if (last_cpu >= 0) {
+            double inst = 100.0 * (double)(cpu_ns - last_cpu) / (double)(now - last_at + 1);
+            if (inst > budget) { if (!onset) onset = last_at; } else onset = 0;
+        }
+        last_cpu = cpu_ns; last_at = now;
         used[k] = cpu_ns; at[k] = now;
         int old = filled >= n ? (k + 1) % n : 0;
         if (filled >= 1) {
@@ -55,8 +62,12 @@ int main(int argc, char **argv) {
             if (filled >= n - 1 && pct > peak) peak = pct;
             if (filled >= n - 1 && pct > budget) {
                 kill(pid, SIGKILL);
+                int64_t stopped = bbw_now_ns();
                 fprintf(stderr, "[guard] BUDGET EXCEEDED: pid %d used %.0f%% of a CPU over the last %d ms "
                                 "(budget %d%%) -> candidate stopped (SIGKILL)\n", pid, pct, n * per_ms, budget);
+                fprintf(stderr, "[guard] containment: candidate ran hot for %.0f ms before it was stopped "
+                                "(design limit: about %d ms)\n",
+                        onset ? (double)(stopped - onset) / 1e6 : -1.0, n * per_ms + per_ms);
                 return 0;
             }
         }

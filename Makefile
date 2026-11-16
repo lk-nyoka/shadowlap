@@ -23,7 +23,7 @@ else
   BUILD   = build/host
 endif
 
-COMMON = src/common.c src/actuator.c src/control.c src/vehicle.c
+COMMON = src/common.c src/actuator.c src/control.c src/monitor.c src/vehicle.c
 BINS   = bbw_plant bbw_v1 bbw_v2 bbw_comparer bbw_hog bbw_sweep bbw_guard bbw_runas
 OUT    = $(addprefix $(BUILD)/,$(BINS))
 
@@ -58,15 +58,15 @@ test: build/host/test_ring build/host/test_control
 build/host/test_ring: tests/test_ring.c include/bbw.h
 	mkdir -p build/host
 	cc -std=gnu11 -O2 -Wall -Wextra -Iinclude -o $@ tests/test_ring.c -lpthread
-build/host/test_control: tests/test_control.c src/control.c include/*.h
+build/host/test_control: tests/test_control.c src/control.c src/monitor.c include/*.h
 	mkdir -p build/host
-	cc -std=gnu11 -O2 -Wall -Wextra -Iinclude -o $@ tests/test_control.c src/control.c -lm
+	cc -std=gnu11 -O2 -Wall -Wextra -Iinclude -o $@ tests/test_control.c src/control.c src/monitor.c -lm
 
 # Copy everything the target needs into one folder for scp/sftp
 bundle: all
 	mkdir -p $(BUILD)/bundle/data
 	cp $(OUT) $(BUILD)/bundle/
-	cp scripts/run_demo.sh $(BUILD)/bundle/
+	cp scripts/run_demo.sh scripts/repeat.sh $(BUILD)/bundle/
 	cp data/*.csv $(BUILD)/bundle/data/ 2>/dev/null || true
 	@echo "Bundle ready in $(BUILD)/bundle"
 

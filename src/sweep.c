@@ -65,12 +65,13 @@ int main(int argc, char **argv) {
     for (int c = 0; c < NCLS; c++) fprintf(csv, ",f_%s", dis_name(c));
     for (int c = 0; c < NCLS; c++) fprintf(csv, ",ep_%s", dis_name(c));
     fprintf(csv, ",ep_lock_wings_closing,ep_lock_low_grip,worst_lock_excess_pct,peak_grip_use_v2,max_motor_c,"
-                 "v1_harvest_mj,v2_safe_harvest_mj,v1_limit_frames\n");
+                 "v1_harvest_mj,v2_safe_harvest_mj,v1_limit_frames,v2_extra_kmh,v2_extra_m\n");
 
     uint64_t tot_frames = 0, tot_f[NCLS] = {0}, tot_ep[NCLS] = {0}, v1_hz[NCLS] = {0}, v1_hz_total = 0;
     int laps_unsafe = 0, laps_lock = 0, total_laps = 0, laps_lock_wings = 0, laps_lock_grip = 0, laps_motor = 0;
     int laps_hard = 0, laps_demand = 0;
-    double sum_v1 = 0, sum_v2safe = 0, peak_v1 = 0, peak_v2 = 0, worst_ex = 0;
+    double sum_v1 = 0, sum_v2safe = 0, peak_v1 = 0, peak_v2 = 0, worst_ex = 0, worst_kmh = 0, worst_m = 0;
+    double worst_kmh_v1 = 0;
 
     for (int run = 0; run < runs; run++) {
         double soc0 = uni(0.50, 0.92), amb = uni(10, 45), grip = uni(0.85, 1.05);
@@ -84,6 +85,7 @@ int main(int argc, char **argv) {
             int prev = DIS_NONE, runlen = 0, lock_wings = 0, lock_grip = 0;
             double wing_at_start = 1;
             double worst = 0, pk2 = 0, max_motor = (cf ? car2 : car).motor_temp_c, h1 = 0, h2 = 0;
+            mon_shortfall_t sh1 = {0}, sh2 = {0};
             for (size_t i = 0; i < n; i++) {
                 const lap_row_t *nx = &lap[i + 1 < n ? i + 1 : i];
                 bbw_frame_t f, f2;
@@ -95,6 +97,8 @@ int main(int argc, char **argv) {
                 if (cf) strategy_v1(&f2, &c1b); else c1b = c1;   /* v1 in v2's situation, for "agree" */
                 int cls = classify(&f2, &c1b, &c2, 1, 50.0);
                 fcount[cls]++;
+                mon_shortfall_update(&sh1, &f, &c1);
+                mon_shortfall_update(&sh2, &f2, &c2);
                 int h1z = hazard(&f, &c1);                        /* same checks on v1 */
                 if (h1z != DIS_NONE) { v1_hz[h1z]++; v1_hz_total++; v1lim++; }
                 /* hard limits count from one frame; soft ones once they last MIN_EPISODE */
@@ -142,8 +146,11 @@ int main(int argc, char **argv) {
             fprintf(csv, "%d,%d,%.3f,%.1f,%.3f,%zu", run, L + 1, soc0, amb, grip, n);
             for (int c = 0; c < NCLS; c++) { fprintf(csv, ",%llu", (unsigned long long)fcount[c]); tot_f[c] += fcount[c]; }
             for (int c = 0; c < NCLS; c++) { fprintf(csv, ",%llu", (unsigned long long)ep[c]); tot_ep[c] += ep[c]; }
-            fprintf(csv, ",%d,%d,%.1f,%.3f,%.1f,%.3f,%.3f,%llu\n", lock_wings, lock_grip, worst * 100, pk2, max_motor,
-                    h1 / 1e6, h2 / 1e6, (unsigned long long)v1lim);
+            fprintf(csv, ",%d,%d,%.1f,%.3f,%.1f,%.3f,%.3f,%llu,%.2f,%.2f\n", lock_wings, lock_grip, worst * 100, pk2, max_motor,
+                    h1 / 1e6, h2 / 1e6, (unsigned long long)v1lim, sh2.worst_kmh, sh2.worst_m);
+            if (sh2.worst_kmh > worst_kmh) worst_kmh = sh2.worst_kmh;
+            if (sh2.worst_m > worst_m) worst_m = sh2.worst_m;
+            if (sh1.worst_kmh > worst_kmh_v1) worst_kmh_v1 = sh1.worst_kmh;
             laps_lock_wings += lock_wings > 0;
             laps_lock_grip += lock_grip > 0;
             laps_motor += ep[DIS_OVER_MOTOR] > 0;
@@ -166,6 +173,8 @@ int main(int argc, char **argv) {
                     "  \"laps_with_hot_motor_overreach\": %d,\n", laps_lock_wings, laps_lock_grip, laps_motor);
         fprintf(js, "  \"peak_rear_grip_use\": {\"v1\": %.4f, \"v2\": %.4f},\n  \"worst_lock_excess_pct\": %.2f,\n",
                 peak_v1, peak_v2, worst_ex * 100);
+        fprintf(js, "  \"worst_extra_speed_kmh\": {\"v1\": %.2f, \"v2\": %.2f},\n  \"worst_extra_distance_m\": %.2f,\n",
+                worst_kmh_v1, worst_kmh, worst_m);
         fprintf(js, "  \"v1_harvest_mj_per_lap\": %.3f,\n  \"v2_%s_harvest_mj_per_lap\": %.3f,\n  \"v2_safe_harvest_mj_per_lap\": %.3f,\n",
                 sum_v1 / 1e6 / total_laps, cf ? "own" : "safe", sum_v2safe / 1e6 / total_laps, sum_v2safe / 1e6 / total_laps);
         fprintf(js, "  \"v1_limit_break_frames\": %llu,\n  \"frames_by_class\": {", (unsigned long long)v1_hz_total);

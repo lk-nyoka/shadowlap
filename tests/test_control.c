@@ -145,6 +145,27 @@ int main(void) {
     assert(hazard(&fm, &bad) == DIS_OVER_MOTOR);
     printf("metamorphic checks and monitor self-tests: ok\n");
 
+    /* the monitor's own limits must agree with the car model's (two copies, written apart) */
+    int xfail = 0;
+    for (double soc = 0.40; soc <= 1.0; soc += 0.01)
+        if (fabs(mon_battery_power_limit(soc) - MGU_MAX_W * car_accept_frac(soc, 0.80)) > 1.0) xfail++;
+    for (double v = 0; v <= 100; v += 2.5)
+        for (double t = 20; t <= 170; t += 2.5)
+            if (fabs(mon_motor_force_limit(v, t) - car_motor_force_limit(v, t, 1)) > 1.0) xfail++;
+    assert(xfail == 0);
+
+    /* consequence: v3 under-braking leaves the car faster at the end of the zone */
+    mon_shortfall_t sh1 = {0}, sh3 = {0};
+    bbw_frame_t fz = frame(250, 30, 0.5, LAP_HARVEST_CAP_J + 1);
+    for (int i = 0; i < 100; i++) {                /* one second of braking */
+        strategy_v1(&fz, &a); mon_shortfall_update(&sh1, &fz, &a);
+        strategy_v3(&fz, &b); mon_shortfall_update(&sh3, &fz, &b);
+    }
+    printf("1 s of braking with the lap energy used up: v1 +%.1f km/h, v3 +%.1f km/h (+%.1f m)\n",
+           sh1.worst_kmh, sh3.worst_kmh, sh3.worst_m);
+    assert(sh1.worst_kmh < 0.01 && sh3.worst_kmh > 10.0);
+    printf("monitor cross-check and consequence: ok\n");
+
     /* wings still open at the start of braking: less grip than with them closed */
     assert(car_rear_grip_aero(80, 0.0, 1.0) < car_rear_grip_aero(80, 1.0, 1.0));
     assert(fabs(car_rear_grip_aero(80, 1.0, 1.0) - car_rear_grip(80)) < 1e-6);

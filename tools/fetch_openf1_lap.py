@@ -14,9 +14,9 @@ and a .json with what the lap is. Public timing data is sampled about
 What is real: speed, throttle, brake on/off, track position, lap time.
 What is modelled: everything inside the car (battery, motor, brake forces).
 
-Data via OpenF1 (https://openf1.org), an unofficial project not associated
-with the Formula 1 companies, intended for education, research and
-non-commercial use. F1 and related marks are trademarks of Formula One
+Data via OpenF1 (https://openf1.org), an independent project not associated
+with the Formula 1 companies, licensed CC BY-NC-SA 4.0 and intended for
+education, research and non-commercial use. F1 and related marks are trademarks of Formula One
 Licensing B.V. The fetched files are not committed to this repo (see
 .gitignore); each user downloads their own copy.
 """
@@ -116,7 +116,7 @@ def main():
     json.dump(meta, open(out[:-4] + ".json", "w"), indent=1)
     print(f"wrote {out}: {meta['label']}, {len(car)} telemetry samples -> {len(t)} at 100 Hz, "
           f"{z + 1} braking zones, top {spd.max():.0f} km/h")
-    print("Data via OpenF1 (unofficial; non-commercial use). F1 marks belong to Formula One Licensing B.V.")
+    print("Data via OpenF1 (independent; CC BY-NC-SA 4.0, non-commercial use). F1 marks belong to Formula One Licensing B.V.")
 
 
 if __name__ == "__main__":

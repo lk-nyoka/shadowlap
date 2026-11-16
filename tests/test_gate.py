@@ -98,6 +98,16 @@ def main():
                   ("exit 1 on broken JSON", run("{\"laps\": "), 1),
                   ("--expect FAIL accepts a fail", run(json.dumps(mut(one_lock_frame)), "--expect", "FAIL"), 0),
                   ("--expect FAIL rejects a pass", run(json.dumps(GOOD), "--expect", "FAIL"), 1)]
+        # a changed safety monitor (wrong pin) must make good evidence INVALID
+        pin = os.path.join(d, "pin")
+        with open(pin, "w") as fp:
+            fp.write("0" * 64 + "\n")
+        p = os.path.join(d, "s.json")
+        with open(p, "w") as fp:
+            fp.write(json.dumps(GOOD))
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "gate.py"), p, "--expect", "INVALID"],
+                           capture_output=True, text=True, env={**os.environ, "BBW_MONITOR_PIN": pin})
+        checks.append(("monitor not matching its pin -> INVALID", r.returncode, 0))
         for name, got, want in checks:
             ok = got == want
             bad += not ok

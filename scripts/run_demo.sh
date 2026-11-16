@@ -156,7 +156,7 @@ run_one() {
     cat "$out/plant.log" "$out/comparer.log" | grep -E "done|not valid|ERROR" | sed 's/^/    /'
     # if started with sudo, give the results back to the normal user
     [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUTROOT" 2>/dev/null
-    cat "$out"/v2.log "$out"/events.log "$out"/guard.log 2>/dev/null | grep -E "ATTACK|attack:|note:|injected|SIG|BUDGET|within budget" | sed "s/^/    /"
+    cat "$out"/v2.log "$out"/events.log "$out"/guard.log 2>/dev/null | grep -E "ATTACK|attack:|note:|injected|SIG|BUDGET|containment|within budget" | sed "s/^/    /"
     return 0
 }
 

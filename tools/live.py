@@ -40,7 +40,8 @@ import lapgen  # noqa: E402
 
 FIELDS = ["seq", "t_lap", "zone", "v_kmh", "soc", "lap_harvest_mj", "v1_regen", "v1_applied",
           "v1_latency_us", "v2_present", "v2_regen", "class", "f_rear_grip", "plant_lag_us",
-          "v1_friction", "v2_friction", "f_rear_req", "a_req", "brake", "motor_temp_c", "wing_closed"]
+          "v1_friction", "v2_friction", "f_rear_req", "a_req", "brake", "motor_temp_c", "wing_closed",
+          "v2_extra_kmh"]
 SCENARIOS = ["shadow", "crash", "freeze", "sigstop", "flood", "attack", "baseline"]
 CANDIDATES = ["v2", "v2.1", "v3"]
 # Track conditions for a live lap. Fixed list, so nothing typed in the browser reaches a shell.
@@ -465,7 +466,7 @@ canvas{width:100%;display:block}
 <div class="top">
  <div class="card"><h2 id="maph">The car on track</h2><canvas id="map" height="300"></canvas>
   <div class="legend"><span><i style="background:#ececea"></i>track</span><span><i style="background:#ff6b3d"></i>braking zones</span><span><i style="background:#3ecf8e;height:8px;width:8px;border-radius:50%"></i>the car now</span><span>dots on the track: where the candidate broke a limit</span></div>
-  <div class="legend" style="margin-top:4px"><span>Lap data: OpenF1 (unofficial, non-commercial). Speeds and positions are real; forces, battery and motor are modelled.</span></div></div>
+  <div class="legend" style="margin-top:4px"><span>Lap data: OpenF1 (independent, CC BY-NC-SA 4.0, non-commercial). Speeds and positions are real; forces, battery and motor are modelled; extra speed is an estimate.</span></div></div>
  <div class="card"><h2>Rear brakes right now</h2>
   <div id="story" class="story">Press Start lap, or play a video, to begin.</div>
   <div class="split"><div class="lbl">Driver asks the rear for</div><div class="val" id="b_req">-</div></div>
@@ -510,8 +511,8 @@ let R=[],misses=0,ovr=0,seen=new Set(),lastCls='agree',dirty=true,lastRowWall=0,
 function reset(s){R=[];misses=0;ovr=0;seen=new Set();lastCls='agree';lastRowWall=0;$('log').innerHTML='';
  $('scnt').textContent=s.scenario+(s.source==='qnx'?' · QNX':' · this PC')+(run&&run.candidate&&run.running?' · '+run.candidate:'');dirty=true;if(ready)setTimeout(()=>sync(true),200)}
 function add(rows){if(rows.length)lastRowWall=Date.now();for(const r of rows){
-  const [seq,t,zone,v,soc,mj,r1,app,lat,p2,r2,cls,grip,lag,f1,f2,req,areq,brk,mot,wing]=r;if(lag>2000)ovr++;
-  const o={seq,t,zone,v,soc,mj,k1:r1*v/3.6/1e3,app,lat,p2,k2:p2?r2*v/3.6/1e3:null,cls,grip,r1,r2,f1,f2,req,areq,brk,mot,wing};R.push(o);if(!app)misses++;
+  const [seq,t,zone,v,soc,mj,r1,app,lat,p2,r2,cls,grip,lag,f1,f2,req,areq,brk,mot,wing,xk]=r;if(lag>2000)ovr++;
+  const o={seq,t,zone,v,soc,mj,k1:r1*v/3.6/1e3,app,lat,p2,k2:p2?r2*v/3.6/1e3:null,cls,grip,r1,r2,f1,f2,req,areq,brk,mot,wing,xk:xk||0};R.push(o);if(!app)misses++;
   const key=cls+'@'+zone;
   if(cls!==lastCls&&cls!=='agree'&&cls!=='within_limits'&&!(zone>=0&&seen.has(key))){seen.add(key);const li=document.createElement('li');
    li.innerHTML=`<span class="tag" style="background:${COL[cls]}">${cls.replace(/_/g,' ')}</span>v2 ${TXT[cls]}<em>${t.toFixed(1)} s · ${zone>=0?'braking zone '+(zone+1):'on throttle'} · ${v.toFixed(0)} km/h · battery ${(soc*100).toFixed(0)}%</em>`;
@@ -572,7 +573,7 @@ function story(o){if(!o.brk||o.req<1){return `On the throttle at <b>${o.v.toFixe
   case 'over_battery':return base+'<span style="color:var(--warn)">v2 would charge the nearly full battery harder than it can take.</span> v1 eases off.';
   case 'over_lap_cap':return base+'<span style="color:#9b8cff">v2 keeps harvesting after the lap\'s energy limit is used up.</span> v1 stops.';
   case 'over_motor':return base+'<span style="color:#e05fa0">The motor is hot; v2 still asks it for full braking.</span> v1 backs off.';
-  case 'demand_not_met':return base+'<span style="color:#4f8fe0">The candidate brakes less than the driver asked: the motor may not charge here and the discs are not told to make up the difference.</span> v1 delivers the full request.';}
+  case 'demand_not_met':return base+'<span style="color:#4f8fe0">The candidate brakes less than the driver asked: the motor may not charge here and the discs are not told to make up the difference.'+(o.xk>0.5?' The car would already be <b>'+o.xk.toFixed(1)+' km/h faster</b> than it should be.':'')+'</span> v1 delivers the full request.';}
  return base}
 function drawNow(){drawMap();if(!R.length)return;const t=lapT();let o=R[R.length-1];
  if(t!==null&&o.t>t){for(let i=R.length-1;i>=0;i--){if(R[i].t<=t){o=R[i];break}}}

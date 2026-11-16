@@ -147,7 +147,9 @@ it as a child process instead).
 
 | Label | Meaning |
 |---|---|
-Every limit is checked on the candidate's command itself, not only where it
+The checks live in their own module, `src/monitor.c`, with their own copy of
+every limit (a test cross-checks it against the car model) and a pinned hash
+that the gate verifies. Every limit is checked on the candidate's command itself, not only where it
 differs from v1, and the same checks run on v1 (a flaw both share is still
 caught, and a v1 that breaks a limit makes the evidence INVALID).
 

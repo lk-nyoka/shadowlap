@@ -20,8 +20,14 @@ Fails closed: exit code 0 only for PASS_WITHIN_SCOPE (or, with --expect X,
 only when the verdict is X, so CI can prove the gate rejects a known-bad
 candidate). --report-only always exits 0.
 
-Also writes <summary dir>/manifest.json: what exactly was tested (lap file
-and binary hashes, seed, ranges, git commit), so a verdict can be traced.
+Also writes <summary dir>/manifest.json: what exactly was tested (lap file,
+monitor, controllers and binary hashes, seed, ranges, git commit), so a
+verdict can be traced.
+
+The monitor (the limit checks, src/monitor.c + include/monitor.h) is pinned:
+its SHA-256 must match tools/monitor.sha256, or the verdict is INVALID. A
+change to the checks therefore needs a deliberate, reviewable change to the
+pin, and cannot slip in with a candidate.
 """
 import argparse
 import hashlib
@@ -48,6 +54,29 @@ def sha256(path):
                 h.update(chunk)
         return h.hexdigest()
     except OSError:
+        return None
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MONITOR_FILES = ["src/monitor.c", "include/monitor.h"]
+
+
+def monitor_sha256():
+    h = hashlib.sha256()
+    for f in MONITOR_FILES:
+        try:
+            with open(os.path.join(ROOT, f), "rb") as fp:
+                h.update(fp.read())
+        except OSError:
+            return None
+    return h.hexdigest()
+
+
+def pinned_monitor():
+    path = os.environ.get("BBW_MONITOR_PIN", os.path.join(ROOT, "tools", "monitor.sha256"))
+    try:
+        return open(path).read().split()[0]
+    except (OSError, IndexError):
         return None
 
 
@@ -129,6 +158,11 @@ def main():
     else:
         load_err = None
     verdict, reasons = ("INVALID", [f"cannot read summary: {load_err}"]) if load_err else evaluate(s)
+    mon, pin = monitor_sha256(), pinned_monitor()
+    if mon is None or pin is None or mon != pin:
+        verdict = "INVALID"
+        reasons = reasons + [f"safety monitor does not match the pinned version (monitor {str(mon)[:12]}, "
+                             f"pinned {str(pin)[:12]}): review the checks and update tools/monitor.sha256"]
 
     s = s if isinstance(s, dict) else {}
     name = s.get("candidate", "?")
@@ -152,6 +186,8 @@ def main():
                 "summary_file": a.summary, "summary_sha256": sha256(a.summary),
                 "lap_file": s.get("lap_file"), "lap_sha256": sha256(s["lap_file"]) if s.get("lap_file") else None,
                 "tool_binary": a.binary, "tool_sha256": sha256(a.binary),
+                "monitor_sha256": mon, "monitor_pinned_sha256": pin,
+                "controllers_sha256": sha256(os.path.join(ROOT, "src", "control.c")),
                 "git_commit": git_commit(), "seed": s.get("seed"), "mode": s.get("mode"),
                 "ranges": s.get("ranges"), "rules": s.get("rules")}
     try:

@@ -17,8 +17,8 @@ disagreed, why, how serious it was, and a verdict that fails closed.
 **Shadow mode is not new.** Running old and new vehicle software side by
 side and comparing them is described in patents such as Bosch US 12,386,724
 and Hitachi Astemo US 12,536,094 (which also covers running the new version
-on a different processor). Brake test benches and brake HIL rigs exist too
-(dSPACE, Vector). What Shadow Lap offers is an **open, QNX-based reference
+on a different processor). Commercial brake test benches and
+hardware-in-the-loop systems exist too. What Shadow Lap offers is an **open, QNX-based reference
 implementation for brake blending** that tests its own containment: a
 hostile candidate is attacked against the trusted side route by route and
 the results are measured, the limit checks are absolute, and the evidence
@@ -60,8 +60,9 @@ and the **candidate** (v2, v2.1, v3). On a normal day v2's flaws stay hidden;
 with hot weather and worn tyres the same lap shows v2 risking a rear lock at
 the first braking zone (about 9 s in) and over-asking a hot motor later.
 
-**What is real and what is modelled.** From OpenF1 (unofficial, free for
-non-commercial use; about 3.7 samples a second): speed, throttle, brake
+**What is real and what is modelled.** From OpenF1 (an independent project
+not associated with Formula 1; licensed CC BY-NC-SA 4.0, for non-commercial
+use; about 3.7 samples a second): speed, throttle, brake
 on/off, track position, lap time. Shadow Lap interpolates that to a 100 Hz
 replay, so the 10 ms frames are simulation frames, not 100 Hz measurements,
 and the braking g is derived from smoothed speed. Battery, motor, wings, grip
@@ -85,7 +86,8 @@ same checks run on v1.
 | v2 over-asks a hot motor | air temperature | 37% of laps at 10–25 °C, 67% at 25–35 °C, 96% at 35–45 °C |
 | v2 over-asks a hot motor | lap of the run | 27% on lap 1, 84% on lap 2, 82% on lap 3 |
 | v3 brakes less than asked | lap of the run | 92% of first laps, 30% of later laps |
-| v1 (the baseline) | | broke no limit on any frame; peak rear grip use 95% |
+| v1 (the baseline) | | broke no limit on any frame; peak rear grip use 95% (v1 caps itself at 95% of grip, so that figure is by construction) |
+| v3's consequence | | worst case: the car still **13.8 km/h faster** at the end of a braking zone, **6 m further** down the road (estimated from the missing braking; v1 and v2.1: 0) |
 
 | Candidate | Laps with a limit break | Gate verdict |
 |---|---|---|
@@ -151,7 +153,11 @@ burns it for 30 seconds while the lap runs.
 core below 64. QNX 8.0 discontinued adaptive partitioning, so `bbw_guard`
 uses what QNX 8.0 offers instead: it reads the candidate's CPU-time clock
 from outside every 50 ms, at priority 64 (above anything v2 can reach), and
-stops the candidate if it uses more than 40% of a CPU over a second. On
+stops the candidate if it uses more than 40% of a CPU over a second. It is a
+watchdog with a measured containment time (it logs how long the candidate ran
+hot before being stopped; the design limit is about 1.05 s), not an
+instantaneous CPU reservation. If the guard's log is incomplete, the report
+marks that run's evidence as incomplete. On
 Linux the hostile v2 was stopped about a second into its CPU burn (98% of a
 CPU), with 0 v1 misses. **On QNX:** `[guard] BUDGET EXCEEDED: pid 2715673 used
 98% of a CPU over the last 1000 ms (budget 40%) -> candidate stopped
@@ -194,6 +200,17 @@ This is an observation about these two setups, both running on top of the
 Windows host scheduler, not proof that Linux cannot do real time (PREEMPT_RT
 Linux on the same hardware would be the fair comparison). On Linux in a cloud
 container v1 also stayed at 0–2 misses.
+
+## Built during the hackathon
+
+The repository was created on 16 November 2026, after the hackathon opened
+(2 November); every commit is in its history. In order: the five-process QNX
+system and the seven scenarios; QNX 8.0 results; motor and wing physics, the
+many-lap sweep and the release gate; the real Monza lap with the track map;
+then, after two rounds of design review, the fail-closed gate, read-only
+candidate inputs, absolute limit checks and candidate v3, the privileged
+priority band (found by the QNX attack test), the CPU-budget guard and the
+`bbw_runas` launcher.
 
 ## How it works
 
@@ -262,8 +279,10 @@ python3 tools/report.py out                           # adds the many-laps chart
 The gate has three verdicts: **PASS_WITHIN_SCOPE**, **FAIL**, and **INVALID**
 (missing or inconsistent evidence, the wrong number of laps or frames,
 missing candidate answers, or v1 itself breaking a limit). Anything but a
-pass exits 1. It writes `manifest.json` beside the summary: lap-file and tool
-hashes, seed, ranges, git commit. `python3 tests/test_gate.py` feeds it 18
+pass exits 1. It writes `manifest.json` beside the summary: lap-file, tool,
+controllers and monitor hashes, seed, ranges, git commit. The monitor's hash
+must match `tools/monitor.sha256`, or the verdict is INVALID, so a change to
+the checks cannot slip in unnoticed. `python3 tests/test_gate.py` feeds it 18
 broken, incomplete and unsafe summaries to prove it fails closed.
 
 GitHub runs all of this on every push (`.github/workflows/shadow-gate.yml`)
@@ -328,7 +347,8 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
 | Path | What |
 |---|---|
 | `include/bbw.h` | messages, never-blocking rings (including the read-only broadcast ring), shared regions |
-| `include/control.h`, `src/control.c` | car limits (battery, motor torque and heat, grip, wings), v1, v2, v2.1 and v3, the absolute limit checks |
+| `include/control.h`, `src/control.c` | car limits (battery, motor torque and heat, grip, wings), v1, v2, v2.1 and v3 |
+| `include/monitor.h`, `src/monitor.c` | the safety monitor: limit specification, absolute checks, consequence estimate; hash pinned in `tools/monitor.sha256` |
 | `include/vehicle.h`, `src/vehicle.c` | the simulated car, shared by the live plant and the sweep |
 | `src/sweep.c` | `bbw_sweep`: hundreds of laps in varied conditions, in seconds |
 | `tools/gate.py`, `.github/workflows/` | release verdict, and GitHub checks on every push |
@@ -356,7 +376,17 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
   else) is the next test.
 - **Checks cover rear lock, braking demand, battery, lap energy and motor
   heat.** Not modelled: yaw and stability, left/right asymmetry, ABS/ESC
-  interaction, actuator rate limits, sensor faults, wet tracks.
+  interaction, actuator rate limits, sensor faults, wet tracks, friction
+  brake capacity, and long-duration or mode-transition faults (Volvo's
+  trigger needed about 100 s of pedal-free regen coasting; our laps contain
+  no such state, so a clean pass says nothing about that kind of fault).
+- **The checker is separate, but not fully independent.** The limit checks
+  live in `src/monitor.c` with their own copy of every limit (cross-checked
+  against the car model by a test) and a pinned hash; the per-frame grip and
+  braking request still come from the car model.
+- **Consequences are estimates.** The replayed speed does not change; the
+  extra speed and distance are computed from the braking a candidate did not
+  deliver, using the car's mass.
 - **Open-loop by nature.** In shadow mode v2 sees the car v1 drives; the
   counterfactual sweep is a first answer to that, using the same model.
 - **The deadline-miss fallback is illustrative**: discs only, capped at 95% of

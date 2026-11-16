@@ -100,6 +100,7 @@ def episodes(d):
             v0=float(v[0]), v_lock=float(v[k_lock]), t_lock=float(d["t_lap"][seg][k_lock]),
             grip=float(grip[k_lock]), v2rear=float(rear2[k_lock]),
             req=float(d["f_rear_req"][seg][int(np.argmax(d["f_rear_req"][seg] - rear2))]),
+            xkmh=float(d["v2_extra_kmh"][seg].max()) if "v2_extra_kmh" in d.dtype.names else 0.0,
             v2short=float(rear2[int(np.argmax(d["f_rear_req"][seg] - rear2))]),
         ))
         i = j + 1
@@ -136,7 +137,10 @@ def sentence(e):
         return (f"In {z} ({when}, braking from {e['v0']:.0f} km/h) the driver asked the rear for up to "
                 f"{e['req'] / 1e3:.1f} kN but the candidate delivered only {e['v2short'] / 1e3:.1f} kN, although the "
                 f"tyres could grip more. The motor was not allowed to take its share and the discs were not told "
-                f"to make up the difference. v1 delivered the full request.")
+                f"to make up the difference. v1 delivered the full request."
+                + (f" Estimated consequence: the car would still be {e['xkmh']:.1f} km/h faster than intended "
+                   f"(the replayed speed does not change; this is computed from the missing braking)."
+                   if e.get('xkmh', 0) > 0.5 else ""))
     if e["cls"] == "shadow_missing":
         return (f"From {e['t0']:.1f} s to {e['t1']:.1f} s ({e['n']} frames) v2 gave no answer. "
                 f"v1 kept braking normally; these frames are marked as gaps, not as agreement.")
@@ -385,12 +389,25 @@ def main():
                      f"<td class='num'>{lat.get('p99', -1):.0f}</td><td class='num'>{lat.get('max', -1):.0f}</td>"
                      f"<td class='num'>{gaps_s}</td></tr>")
     parts.append("</table>")
+    # the CPU-budget guard must have watched every run that had a candidate; if
+    # its log has no final line, it crashed or never started: evidence incomplete
+    unguarded = []
+    for n in ORDER:
+        if n in runs and n != "baseline":
+            g = os.path.join(a.outdir, n, "guard.log")
+            txt = open(g).read() if os.path.exists(g) else ""
+            if "within budget" not in txt and "BUDGET EXCEEDED" not in txt:
+                unguarded.append(n)
+    if unguarded:
+        parts.append("<div class='note'><b>Evidence incomplete:</b> the CPU-budget guard did not finish watching "
+                     f"the candidate in: {html.escape(', '.join(unguarded))}. Treat those runs as INVALID for any "
+                     "claim about CPU containment.</div>")
     attack_log = os.path.join(a.outdir, "attack", "v2.log")
     if os.path.exists(attack_log):
         lines = [l.strip() for l in open(attack_log) if "ATTACK" in l or "note:" in l]
         glog = os.path.join(a.outdir, "attack", "guard.log")
         if os.path.exists(glog):
-            lines += [l.strip() for l in open(glog) if "BUDGET" in l or "within budget" in l]
+            lines += [l.strip() for l in open(glog) if "BUDGET" in l or "containment" in l or "within budget" in l]
         if lines:
             parts.append("<p><b>Attack, route by route:</b></p><pre>" + html.escape("\n".join(lines)) + "</pre>")
             if any("NOT BLOCKED" in l for l in lines):
