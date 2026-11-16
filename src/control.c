@@ -1,4 +1,5 @@
 #include <math.h>
+#include <string.h>
 #include "control.h"
 
 static double clamp(double x, double lo, double hi) {
@@ -15,6 +16,25 @@ double car_accept_frac(double soc, double taper_start) {
 double car_rear_grip(double v) {
     double load = CAR_MASS_KG * CAR_G + CAR_DOWNFORCE_K * v * v;
     return CAR_MU * CAR_REAR_BRAKE_SHARE * load;
+}
+
+double car_rear_grip_aero(double v, double wing_closed, double mu_scale) {
+    if (wing_closed < 0) wing_closed = 0;
+    if (wing_closed > 1) wing_closed = 1;
+    double k = CAR_DOWNFORCE_K * (AERO_STRAIGHT_FRAC + (1.0 - AERO_STRAIGHT_FRAC) * wing_closed);
+    double load = CAR_MASS_KG * CAR_G + k * v * v;
+    return mu_scale * CAR_MU * CAR_REAR_BRAKE_SHARE * load;
+}
+
+double car_motor_force_limit(double v, double temp_c, int use_temp) {
+    double f = MOTOR_FORCE_MAX_N;
+    double by_power = v > 1.0 ? MGU_MAX_W / v : MOTOR_FORCE_MAX_N;
+    if (by_power < f) f = by_power;
+    if (use_temp && temp_c > MOTOR_DERATE_START_C) {
+        double k = (MOTOR_MAX_C - temp_c) / (MOTOR_MAX_C - MOTOR_DERATE_START_C);
+        f *= k < 0 ? 0 : k;
+    }
+    return f;
 }
 
 double car_regen_power_limit(double soc, double lap_harvest_j) {
@@ -38,6 +58,8 @@ void strategy_v1(const bbw_frame_t *f, bbw_cmd_t *out) {
 
     double p_lim = car_regen_power_limit(f->soc, f->lap_harvest_j);
     double f_reg_max = f->v > 1.0 ? p_lim / f->v : 0.0;
+    double f_motor = car_motor_force_limit(f->v, f->motor_temp_c, 1);
+    if (f_motor < f_reg_max) f_reg_max = f_motor;
     out->f_regen = clamp(rear, 0, f_reg_max);
     out->f_friction = rear - out->f_regen;
 }
@@ -48,15 +70,48 @@ void strategy_v2(const bbw_frame_t *f, bbw_cmd_t *out) {
     out->f_friction = 0;
     if (!f->brake || f->a_req <= 0) return;
 
-    /* idea: shift 12% more braking to the rear so the motor can harvest more */
-    double rear = f->f_rear_req * 1.12;
+    /* idea: shift 6% more braking to the rear so the motor can harvest more */
+    double rear = f->f_rear_req * 1.06;
 
     /* charges at full power until 90% (v1 starts easing off at 80%) */
     double p_lim = MGU_MAX_W * car_accept_frac(f->soc, 0.90);
-    /* BUG on purpose: no lap-cap check, no grip check */
+    /* BUGS on purpose: no lap-cap check, no grip check, no motor temperature check */
     double f_reg_max = f->v > 1.0 ? p_lim / f->v : 0.0;
+    double f_motor = car_motor_force_limit(f->v, f->motor_temp_c, 0);
+    if (f_motor < f_reg_max) f_reg_max = f_motor;
     out->f_regen = clamp(rear, 0, f_reg_max);
     out->f_friction = rear - out->f_regen;
+}
+
+void strategy_v2_fixed(const bbw_frame_t *f, bbw_cmd_t *out) {
+    out->seq = f->seq;
+    out->f_regen = 0;
+    out->f_friction = 0;
+    if (!f->brake || f->a_req <= 0) return;
+
+    /* keep v2's idea (6% more rear braking) but never past 95% of grip */
+    double rear = f->f_rear_req * 1.06;
+    double grip = 0.95 * f->f_rear_grip;
+    if (rear > grip) rear = grip;
+
+    /* charge harder than v1 until 85% (v1 eases off from 80%), respect the lap cap */
+    double p_lim = MGU_MAX_W * car_accept_frac(f->soc, 0.85);
+    double v1_lim = car_regen_power_limit(f->soc, f->lap_harvest_j);
+    double cap_left = LAP_HARVEST_CAP_J - f->lap_harvest_j;
+    if (cap_left < 0) cap_left = 0;
+    if (p_lim > cap_left / BBW_DT) p_lim = cap_left / BBW_DT;
+    /* the battery's true acceptance still applies (v1's limit) */
+    if (p_lim > v1_lim) p_lim = v1_lim;
+    double f_reg_max = f->v > 1.0 ? p_lim / f->v : 0.0;
+    double f_motor = car_motor_force_limit(f->v, f->motor_temp_c, 1);
+    if (f_motor < f_reg_max) f_reg_max = f_motor;
+    out->f_regen = clamp(rear, 0, f_reg_max);
+    out->f_friction = rear - out->f_regen;
+}
+
+void strategy_candidate(const char *name, const bbw_frame_t *f, bbw_cmd_t *out) {
+    if (name && (strcmp(name, "v2.1") == 0 || strcmp(name, "fixed") == 0)) strategy_v2_fixed(f, out);
+    else strategy_v2(f, out);
 }
 
 const char *dis_name(int c) {
@@ -66,6 +121,7 @@ const char *dis_name(int c) {
     case DIS_OVER_BATTERY:   return "over_battery";
     case DIS_OVER_LAP_CAP:   return "over_lap_cap";
     case DIS_REAR_LOCK_RISK: return "rear_lock_risk";
+    case DIS_OVER_MOTOR:     return "over_motor";
     case DIS_SHADOW_MISSING: return "shadow_missing";
     }
     return "unknown";
@@ -90,6 +146,9 @@ int classify(const bbw_frame_t *f, const bbw_cmd_t *v1, const bbw_cmd_t *v2,
 
     double p_batt = MGU_MAX_W * car_accept_frac(f->soc, 0.80);
     if (p2 > p_batt * 1.01 + 1.0) return DIS_OVER_BATTERY;
+
+    if (v2->f_regen > car_motor_force_limit(f->v, f->motor_temp_c, 1) * 1.01 + 1.0)
+        return DIS_OVER_MOTOR;
 
     return DIS_WITHIN_LIMITS;
 }

@@ -60,7 +60,9 @@ typedef struct {
     double   soc;          /* battery state of charge, 0..1 of usable window */
     double   lap_harvest_j;/* energy harvested so far this lap, J */
     double   f_rear_req;   /* rear braking force the driver is asking for, N */
-    double   f_rear_grip;  /* rear tyre grip limit, N */
+    double   f_rear_grip;  /* rear tyre grip limit right now, N (speed, wings, track) */
+    double   motor_temp_c; /* motor temperature, deg C */
+    double   wing_closed;  /* 0 = straight-line mode (low downforce), 1 = corner mode */
 } bbw_frame_t;
 
 /* What a controller decides. */

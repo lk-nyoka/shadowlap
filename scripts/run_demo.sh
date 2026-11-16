@@ -12,11 +12,15 @@
 #   flood     v2 plus CPU-burning threads at shadow priority
 #   attack    v2 tries to command the brakes directly
 #   all       every scenario above, one after another
+#   stop      end a run that is in progress (kills the programs it started)
 #
 # Optional environment:
 #   BIN=dir           where the bbw_* programs are (default: script folder, then build/host)
 #   LAP=file          lap CSV (default data/lap_a.csv)
 #   SECONDS_MAX=n     stop after n seconds (default: whole lap)
+#   START_DELAY_MS=n  how long the car waits before rolling (default 2500)
+#   CANDIDATE=v2.1    which candidate v2 runs: v2 (default, flawed) or v2.1 (fixed)
+#   PLANT_ARGS="..."  conditions for the car, e.g. "--soc0 0.7 --ambient 40 --grip 0.9 --laps 3"
 #   PROD_CPU=n        pin plant and v1 to CPU n
 #   SHADOW_CPU=n      pin v2, comparer and hog to CPU n
 #   HOG_PRIO=n        priority of the CPU burners (default 10 = shadow level; 0 = normal)
@@ -38,6 +42,8 @@ OUTROOT=${2:-out}
 # v1 included, once real-time work uses 95% of a second, so a greedy
 # real-time shadow can still hurt v1 there. Default to normal priority on Linux.
 if [ "$(uname -s)" = "QNX" ]; then HOGP=${HOG_PRIO:-10}; else HOGP=${HOG_PRIO:-0}; fi
+
+CAND="--candidate ${CANDIDATE:-v2}"
 
 pin() { [ -n "${1:-}" ] && echo "--cpu $1"; }
 PP=$(pin "${PROD_CPU:-}")
@@ -61,7 +67,7 @@ first_brake_seq() {
 }
 
 # Whole seconds only: some minimal shells' sleep does not take fractions.
-START_DELAY_MS=2500
+START_DELAY_MS=${START_DELAY_MS:-2500}
 
 cleanup() {
     for p in ${PIDS:-}; do kill -9 "$p" 2>/dev/null; done
@@ -75,9 +81,10 @@ run_one() {
     echo "=== scenario: $s  ->  $out"
     PIDS=""
 
-    "$BIN/bbw_plant" --lap "$LAP" $MAXA $PP --start-delay-ms $START_DELAY_MS > "$out/plant.log" 2>&1 &
+    "$BIN/bbw_plant" --lap "$LAP" $MAXA $PP --start-delay-ms $START_DELAY_MS ${PLANT_ARGS:-} > "$out/plant.log" 2>&1 &
     PLANT=$!
     PIDS="$PIDS $PLANT"
+    mkdir -p "$OUTROOT" && echo "$$ $PLANT" > "$OUTROOT/.pids"
     sleep 1
     "$BIN/bbw_v1" $PP > "$out/v1.log" 2>&1 &
     PIDS="$PIDS $!"
@@ -88,11 +95,11 @@ run_one() {
     FB=$(first_brake_seq)
     case $s in
         baseline) ;;
-        shadow)   as_v2 "$BIN/bbw_v2" $SP > "$out/v2.log" 2>&1 & PIDS="$PIDS $!" ;;
-        crash)    as_v2 "$BIN/bbw_v2" $SP --crash-at $((FB + 50)) > "$out/v2.log" 2>&1 & PIDS="$PIDS $!" ;;
-        freeze)   as_v2 "$BIN/bbw_v2" $SP --freeze-at "$FB" --freeze-ms 2000 > "$out/v2.log" 2>&1 & PIDS="$PIDS $!" ;;
+        shadow)   as_v2 "$BIN/bbw_v2" $SP $CAND > "$out/v2.log" 2>&1 & PIDS="$PIDS $!" ;;
+        crash)    as_v2 "$BIN/bbw_v2" $SP $CAND --crash-at $((FB + 50)) > "$out/v2.log" 2>&1 & PIDS="$PIDS $!" ;;
+        freeze)   as_v2 "$BIN/bbw_v2" $SP $CAND --freeze-at "$FB" --freeze-ms 2000 > "$out/v2.log" 2>&1 & PIDS="$PIDS $!" ;;
         sigstop)
-            as_v2 "$BIN/bbw_v2" $SP > "$out/v2.log" 2>&1 &
+            as_v2 "$BIN/bbw_v2" $SP $CAND > "$out/v2.log" 2>&1 &
             V2=$!
             PIDS="$PIDS $V2"
             # the lap starts ~2.5 s after launch; stop v2 as the car reaches the first braking zone
@@ -101,7 +108,7 @@ run_one() {
             PIDS="$PIDS $!"
             ;;
         flood)
-            as_v2 "$BIN/bbw_v2" $SP > "$out/v2.log" 2>&1 &
+            as_v2 "$BIN/bbw_v2" $SP $CAND > "$out/v2.log" 2>&1 &
             PIDS="$PIDS $!"
             "$BIN/bbw_hog" --threads 4 --seconds 120 --prio "$HOGP" $SP > "$out/hog.log" 2>&1 &
             PIDS="$PIDS $!"
@@ -114,6 +121,7 @@ run_one() {
         *) echo "unknown scenario $s"; cleanup; return 1 ;;
     esac
 
+    echo "$$ $PIDS" > "$OUTROOT/.pids"     # lets "run_demo.sh stop" end a run from outside
     wait $PLANT
     wait $COMP 2>/dev/null
     cleanup
@@ -124,7 +132,15 @@ run_one() {
     return 0
 }
 
-trap 'cleanup; exit 1' INT TERM
+trap 'cleanup; exit 1' INT TERM HUP
+
+if [ "$SCEN" = "stop" ]; then
+    # end a run started by another shell (used by the dashboard's Stop button)
+    [ -f "$OUTROOT/.pids" ] && kill -9 $(cat "$OUTROOT/.pids") 2>/dev/null
+    rm -f "$OUTROOT/.pids"
+    echo "stopped"
+    exit 0
+fi
 
 if [ "$SCEN" = "all" ]; then
     for s in baseline shadow crash freeze sigstop flood attack; do run_one $s; done

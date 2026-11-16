@@ -7,6 +7,7 @@
  *   --freeze-at SEQ --freeze-ms MS   hang for MS milliseconds at frame SEQ
  *   --slow-ms MS            take MS extra milliseconds on every frame
  *   --attack                try to open and write the actuator, report result
+ *   --candidate v2|v2.1     which candidate strategy to run (default v2)
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -40,6 +41,7 @@ int main(int argc, char **argv) {
     int freeze_ms = bbw_arg_int(argc, argv, "--freeze-ms", 2000);
     int slow_ms   = bbw_arg_int(argc, argv, "--slow-ms", 0);
     int cpu       = bbw_arg_int(argc, argv, "--cpu", -1);
+    const char *cand = bbw_arg_str(argc, argv, "--candidate", "v2");
 
     if (bbw_arg_flag(argc, argv, "--attack")) {
         /* the attack needs the plant's actuator to exist; give it a moment */
@@ -55,7 +57,7 @@ int main(int argc, char **argv) {
     if (!sh) { fprintf(stderr, "[v2] cannot open %s: %s\n", BBW_SHM_SHADOW, strerror(errno)); return 1; }
     bbw_rt_setup("v2", BBW_PRIO_V2, cpu);
     frame_ring_skip_to_head(&sh->in);          /* ignore any stale backlog */
-    fprintf(stderr, "[v2] shadowing (pid %d)\n", (int)getpid());
+    fprintf(stderr, "[v2] shadowing as candidate %s (pid %d)\n", cand, (int)getpid());
 
     uint64_t handled = 0;
     while (1) {
@@ -81,7 +83,7 @@ int main(int argc, char **argv) {
             if (slow_ms > 0) usleep((useconds_t)slow_ms * 1000);
 
             bbw_cmd_t c;
-            strategy_v2(&f, &c);
+            strategy_candidate(cand, &f, &c);
             c.t_done_ns = bbw_now_ns();
             cmd_ring_push(&sh->out, &c);
             atomic_store(&sh->v2_heartbeat_ns, c.t_done_ns);

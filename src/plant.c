@@ -21,41 +21,17 @@
 #include <unistd.h>
 #include "bbw.h"
 #include "control.h"
-
-typedef struct { double t, dist, v, thr; int brake, zone; } lap_row_t;
+#include "vehicle.h"
 
 static volatile sig_atomic_t g_stop;
 static void on_sig(int s) { (void)s; g_stop = 1; }
 
-static lap_row_t *load_lap(const char *path, size_t *n_out) {
-    FILE *fp = fopen(path, "r");
-    if (!fp) { perror(path); exit(1); }
-    size_t cap = 16384, n = 0;
-    lap_row_t *rows = malloc(cap * sizeof *rows);
-    char line[256];
-    if (!fgets(line, sizeof line, fp)) { fprintf(stderr, "empty lap file\n"); exit(1); }
-    while (fgets(line, sizeof line, fp)) {
-        lap_row_t r;
-        double kmh;
-        if (sscanf(line, "%lf,%lf,%lf,%lf,%d,%d", &r.t, &r.dist, &kmh, &r.thr, &r.brake, &r.zone) != 6)
-            continue;
-        r.v = kmh / 3.6;
-        if (n == cap) { cap *= 2; rows = realloc(rows, cap * sizeof *rows); }
-        rows[n++] = r;
-    }
-    fclose(fp);
-    if (n < 10) { fprintf(stderr, "lap file has too few rows\n"); exit(1); }
-    double dt = (rows[n - 1].t - rows[0].t) / (double)(n - 1);
-    if (fabs(dt - BBW_DT) > 0.002)
-        fprintf(stderr, "[plant] warning: lap sample spacing %.4fs, expected %.4fs\n", dt, BBW_DT);
-    *n_out = n;
-    return rows;
-}
-
 int main(int argc, char **argv) {
     const char *lap_path = bbw_arg_str(argc, argv, "--lap", "data/lap_a.csv");
     double max_s   = bbw_arg_double(argc, argv, "--max-seconds", 0);
-    double soc     = bbw_arg_double(argc, argv, "--soc0", 0.80);
+    double soc0    = bbw_arg_double(argc, argv, "--soc0", 0.80);
+    double ambient = bbw_arg_double(argc, argv, "--ambient", 30.0);
+    double mu      = bbw_arg_double(argc, argv, "--grip", 1.0);
     int    laps    = bbw_arg_int(argc, argv, "--laps", 1);
     int    cpu     = bbw_arg_int(argc, argv, "--cpu", -1);
     int    delay   = bbw_arg_int(argc, argv, "--start-delay-ms", 1500);
@@ -65,7 +41,7 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     size_t nrows;
-    lap_row_t *lap = load_lap(lap_path, &nrows);
+    lap_row_t *lap = vehicle_load_lap(lap_path, &nrows);
 
     /* used by run_demo.sh so the target needs no awk: print the frame where
      * the first braking zone starts, then exit */
@@ -100,13 +76,14 @@ int main(int argc, char **argv) {
     uint64_t total = (uint64_t)nrows * (uint64_t)laps;
     if (max_s > 0 && (uint64_t)(max_s * BBW_HZ) < total) total = (uint64_t)(max_s * BBW_HZ);
 
-    double lap_harvest = 0;
+    vehicle_t car;
+    vehicle_init(&car, soc0, ambient, mu);
     uint64_t misses = 0, clamps = 0, overruns = 0;
     int64_t t0 = bbw_now_ns() + BBW_PERIOD_NS;
 
     for (uint64_t k = 0; k < total && !g_stop; k++) {
         size_t i = (size_t)(k % nrows);
-        if (i == 0) lap_harvest = 0;                       /* new lap */
+        if (i == 0) vehicle_new_lap(&car);
         const lap_row_t *r = &lap[i];
         const lap_row_t *nx = &lap[i + 1 < nrows ? i + 1 : i];
 
@@ -115,20 +92,7 @@ int main(int argc, char **argv) {
 
         /* ---- 1. build the frame ---- */
         bbw_frame_t f;
-        memset(&f, 0, sizeof f);
-        f.seq = k;
-        f.t_lap = r->t;
-        f.dist_m = r->dist;
-        f.v = r->v;
-        f.throttle = r->thr;
-        f.brake = r->brake;
-        f.zone = r->zone;
-        double a = (r->v - nx->v) / BBW_DT;
-        f.a_req = (r->brake && a > 0) ? (a > 60 ? 60 : a) : 0;
-        f.soc = soc;
-        f.lap_harvest_j = lap_harvest;
-        f.f_rear_req = CAR_REAR_BRAKE_SHARE * CAR_MASS_KG * f.a_req;
-        f.f_rear_grip = car_rear_grip(f.v);
+        vehicle_frame(&car, r, nx, k, &f);
         f.t_ns = bbw_now_ns();
 
         /* ---- 2. publish: v1 first, then the shadow copy (never blocks) ---- */
@@ -165,27 +129,11 @@ int main(int argc, char **argv) {
             rr.latency_ns = -1;
         }
 
-        /* the plant enforces physics no matter what it is told */
-        double p_lim = car_regen_power_limit(soc, lap_harvest);
-        double p = c.f_regen * f.v;
-        if (c.f_regen < 0 || p > p_lim * 1.001 + 1.0) {
-            double reg = c.f_regen < 0 ? 0 : (f.v > 1 ? p_lim / f.v : 0);
-            c.f_friction += c.f_regen - reg;
-            c.f_regen = reg;
-            p = reg * f.v;
-            rr.clamped = 1;
-            clamps++;
-        }
+        /* ---- 4. the car enforces physics, then moves on 10 ms ---- */
+        double p = 0;
+        if (vehicle_apply(&car, &f, &c, &p)) { rr.clamped = 1; clamps++; }
         rr.cmd = c;
         rr.p_regen_w = p;
-
-        /* ---- 4. battery: harvest under braking, deploy on full throttle ---- */
-        soc += p * BBW_DT * BATT_CHARGE_EFF / BATT_USABLE_J;
-        lap_harvest += p * BBW_DT;
-        if (f.throttle > 0.9 && soc > DEPLOY_MIN_SOC)
-            soc -= DEPLOY_W * f.throttle * BBW_DT / BATT_USABLE_J;
-        if (soc > 1) soc = 1;
-        if (soc < 0) soc = 0;
 
         rr.shadow_dropped = atomic_load(&shad->in.dropped);
         rr.plant_lag_ns = lag;

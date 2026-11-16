@@ -22,11 +22,35 @@ energy. Harvest too much and you overcharge the battery, break the lap's
 energy limit, or ask the rear tyres for more grip than they have.
 
 - **v1** is the trusted controller. It is in charge.
-- **v2** is the candidate. It tries to harvest more: it moves 12% more braking
+- **v2** is the candidate. It tries to harvest more: it moves 6% more braking
   to the rear, charges at full power until the battery is 90% full (v1 eases
-  off from 80%), and it has a deliberate bug: it forgets the lap energy limit.
+  off from 80%), and it has deliberate flaws: it forgets the lap energy limit,
+  the tyres' grip limit and the motor's temperature limit.
+- **v2.1** is v2 with those flaws fixed, keeping its extra harvesting where it
+  is safe. It shows the end of the story: the evidence found the flaws, the fix
+  removes them, and the release gate approves it.
 
-## The five programs
+### What the car model includes (all illustrative numbers)
+
+- **Battery:** accepts less charge as it fills; a per-lap harvest limit.
+- **Motor (electrical):** a torque limit at low speed and a power limit above
+  it; it heats up with use, cools towards the air, and limits itself above
+  130 °C.
+- **Aerodynamics:** F1 2026-style wings. In straight-line mode the car has
+  less downforce; when braking starts the wings take about 0.2 s to close, so
+  grip is lower for that moment.
+- **Track grip:** a factor for cold, dusty or green tracks.
+
+## Many laps, not one
+
+The live demo proves timing and isolation. `bbw_sweep` answers the
+engineering question: across many laps and conditions, how often would the
+candidate be unsafe, and what would it gain? It uses the same car model and
+strategies with no real-time clock, so 600 laps take under a second. A problem
+counts once it lasts 50 ms. `tools/gate.py` turns the result into a release
+verdict.
+
+## The programs
 
 | Program | Job | Can it brake the car? |
 |---|---|---|
@@ -35,6 +59,7 @@ energy limit, or ask the rear tyres for more grip than they have.
 | `bbw_v2` | Shadow controller. Reads copies of the frames, sends decisions to the comparer. | No |
 | `bbw_comparer` | Lines up v1's and v2's decisions per frame and labels every disagreement. | No |
 | `bbw_hog` | Burns CPU, to show a greedy shadow side cannot starve v1. | No |
+| `bbw_sweep` | Runs hundreds of laps offline with the same car and brains, for statistics and the release gate. | No (no real car at all) |
 
 ## One cycle (10 ms)
 
@@ -91,6 +116,7 @@ the actuator and reports whether it got through.
 | `over_battery` | v2 wanted to charge harder than the battery accepts |
 | `over_lap_cap` | v2 kept harvesting after the lap's energy limit was used |
 | `rear_lock_risk` | v2 asked the rear tyres for more braking than they can grip |
+| `over_motor` | v2 asked a hot motor for more braking than it can safely give |
 | `shadow_missing` | v2 did not answer this frame |
 
 ## Where QNX matters

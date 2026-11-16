@@ -20,11 +20,20 @@ The output is evidence: every moment the two disagreed, why, and how serious it 
 A full lap of Track A (a synthetic lap shaped like a fast, low-downforce
 circuit). v2 is designed to harvest more energy. The report finds it:
 
-- locks the rear wheels in the two hardest braking zones,
-- overcharges a nearly full battery in three zones,
-- keeps harvesting after the lap's energy limit is used up (a planted bug).
+- risks locking the rear wheels: in the hardest braking zone, and at the end
+  of the long straight while the F1-style wings are still closing,
+- overcharges a nearly full battery,
+- keeps harvesting after the lap's energy limit is used up,
+- over-asks the motor once it gets hot (on later laps and hot days),
 
 …while v1 keeps braking on time.
+
+**Across 600 laps** in changing conditions (battery 50–92%, air 10–45 °C,
+track grip 85–105%), run in under a second by `bbw_sweep`: v2 is unsafe on
+600 of 600 laps; rear-lock risk on low grip depends on the track (100% of laps
+below 99% grip, 2% above); hot-motor overreach rises from 1% on lap 1 to 75%
+on lap 3. **v2.1**, the version with those flaws fixed, is unsafe on 0 of 300
+laps, and the release gate approves it.
 
 ### Results on QNX 8.0
 
@@ -112,10 +121,39 @@ python3 tools/report.py out                  # writes out/report.html
 verdict on v2 from the run's evidence, with every number checked against the
 data. Free options (local Ollama or a free Gemini key): [docs/ai-analyst.md](docs/ai-analyst.md).
 
-**Watch it live:** in a second terminal run `python3 tools/live.py out`, then
-open http://localhost:8000 while the demo runs. It follows each scenario as it
-starts. For a run on QNX, stream it to your PC with
-`sh tools/follow_qnx.sh <qnx-ip> shadow` and watch `python3 tools/live.py out-qnx`.
+**Many laps and the release gate:**
+
+```bash
+build/host/bbw_sweep --runs 200 --laps 3 --out out/sweep                    # candidate v2
+build/host/bbw_sweep --runs 200 --laps 3 --candidate v2.1 --out out/sweep-v2.1
+python3 tools/gate.py out/sweep/summary.json          # REJECTED, with reasons
+python3 tools/gate.py out/sweep-v2.1/summary.json     # APPROVED
+python3 tools/report.py out                           # adds the many-laps charts
+```
+
+GitHub runs the same checks on every push (`.github/workflows/shadow-gate.yml`)
+and posts both verdicts in the job summary. Add `--strict` to make a rejection
+fail the build.
+
+Run the live system with the fixed candidate or different conditions:
+`CANDIDATE=v2.1 sh scripts/run_demo.sh shadow out` or
+`PLANT_ARGS="--laps 3 --ambient 40 --grip 0.9" sh scripts/run_demo.sh shadow out`.
+
+**The dashboard (recommended):**
+
+```bash
+python3 tools/live.py --qnx root@172.31.1.10     # leave out --qnx to run on this PC only
+```
+
+Open http://localhost:8000. Pick a lap, a scenario and where to run it
+(this PC or QNX), then press **Start lap**, or just press play on a loaded
+video: the lap starts by itself and the video stays in step with the charts.
+**Stop** ends the run on either machine.
+
+To make the charts match a video: load it, set the offset (the second the lap
+starts), click **Calibrate lap from this video**, hold **B** whenever the car
+brakes, and click **Finish**. The lap is rebuilt so its braking happens exactly
+when the video's does (speeds are modelled). It then appears in the lap list.
 
 On QNX (after `source ~/qnx800/qnxsdp-env.sh`):
 
@@ -146,19 +184,22 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
 | Path | What |
 |---|---|
 | `include/bbw.h` | messages, never-blocking ring buffer, shared regions |
-| `include/control.h`, `src/control.c` | car limits, v1 and v2 strategies, disagreement rules |
+| `include/control.h`, `src/control.c` | car limits (battery, motor torque and heat, grip, wings), v1, v2 and v2.1, disagreement rules |
+| `include/vehicle.h`, `src/vehicle.c` | the simulated car, shared by the live plant and the sweep |
+| `src/sweep.c` | `bbw_sweep`: hundreds of laps in varied conditions, in seconds |
+| `tools/gate.py`, `.github/workflows/` | release verdict, and GitHub checks on every push |
 | `src/plant.c` | simulated car, lap replay, deadline check |
 | `src/actuator.c` | QNX resource manager (Linux: FIFO stand-in) |
 | `src/v1.c`, `src/v2.c` | the two controllers; v2 has built-in fault injection |
 | `src/comparer.c` | joins v1/v2 per frame, writes the evidence |
 | `src/hog.c` | CPU burner for the flood test |
 | `scripts/run_demo.sh` | the seven scenarios |
-| `tools/` | synthetic lap, FastF1 import, HTML report, live dashboard, AI analyst, QNX live link |
+| `tools/` | live dashboard, lap from video (`lapgen.py`), synthetic lap, FastF1 import, HTML report, AI analyst, QNX live link |
 | `tests/` | ring buffer stress test, strategy tests |
 
 ## Honest limits
 
-- Battery, motor and forces are a small illustrative model (`include/control.h`).
+- Battery, motor, wings and forces are a small illustrative model (`include/control.h`).
   The lap only provides speed, throttle and a brake on/off flag.
 - Shadow mode is open-loop: v2 sees a battery shaped by v1's choices.
 - F1 cars use a standard control unit; this is a development and test-rig tool.

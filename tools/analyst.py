@@ -32,7 +32,8 @@ from report import load, episodes      # noqa: E402
 SYSTEM = """You are a vehicle software validation engineer reviewing a shadow-mode test.
 A trusted brake controller (v1) drove the car. A candidate controller (v2) saw the same inputs,
 but its decisions were only logged. You are given rule-based evidence: disagreement episodes
-with ids like E3. Battery, motor and brake forces come from a simulation model.
+with ids like E3 from one lap, and (if present) statistics from a sweep of many laps in varied
+conditions. Battery, motor and brake forces come from a simulation model.
 
 Write a short review in plain English for an engineering lead, with these sections:
 ## Verdict
@@ -73,20 +74,31 @@ def build_evidence(run):
                         at_s=round(e["t_pow"], 1), battery_pct_then=round(e["soc_k"] * 100))
         elif e["cls"] == "over_lap_cap":
             item.update(lap_harvest_used_MJ=round(e["harvest"], 2), v2_max_charge_kW=round(e["p2max"]))
+        elif e["cls"] == "over_motor":
+            item.update(v2_max_charge_kW=round(e["p2max"]))
         out.append(item)
     counts = {}
     for c in d["class"]:
         counts[str(c)] = counts.get(str(c), 0) + 1
+    many = None
+    sp = os.path.join(os.path.dirname(os.path.normpath(run)), "sweep", "summary.json")
+    if os.path.exists(sp):
+        sm = json.load(open(sp))
+        many = {k: sm.get(k) for k in ("laps", "laps_with_unsafe_v2", "laps_with_lock_while_wings_close",
+                                       "laps_with_lock_low_grip", "laps_with_hot_motor_overreach",
+                                       "v1_harvest_mj_per_lap", "v2_safe_harvest_mj_per_lap")}
     return {
+        "many_laps_sweep": many,
         "run": os.path.basename(os.path.normpath(run)),
         "frames": int(len(d)),
         "frame_counts_by_class": counts,
         "v1_deadline_misses": summ.get("v1_deadline_misses"),
         "plant_overruns": summ.get("plant_overruns"),
         "v2_design_notes": [
-            "v2 moves 12% more braking to the rear axle to harvest more",
+            "v2 moves 6% more braking to the rear axle to harvest more",
             "v2 charges at full power until the battery is 90% full; v1 tapers from 80%",
-            "v2 has no lap-harvest-limit check and no rear-grip check",
+            "v2 has no lap-harvest-limit check, no rear-grip check and no motor-temperature check",
+            "the rear wings take about 0.2 s to close when braking starts, so grip is lower at first",
         ],
         "model_limits": {"motor_max_kW": 350, "lap_harvest_cap_MJ": 2.4, "battery_taper_start_pct": 80},
         "episodes": out,

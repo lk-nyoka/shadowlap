@@ -26,6 +26,7 @@ CLASS_COLORS = {
     "rear_lock_risk": "#D85A30",
     "over_battery": "#BA7517",
     "over_lap_cap": "#7F77DD",
+    "over_motor": "#993556",
     "within_limits": "#1D9E75",
     "shadow_missing": "#888780",
 }
@@ -33,6 +34,7 @@ CLASS_TEXT = {
     "rear_lock_risk": "asked the rear tyres for more braking than they could grip",
     "over_battery": "asked to charge harder than the battery could accept",
     "over_lap_cap": "kept harvesting after the lap's energy limit was used up",
+    "over_motor": "asked a hot motor for more braking than it could safely give",
     "within_limits": "chose a different split that stayed within limits",
     "shadow_missing": "gave no answer (crashed, frozen or behind)",
 }
@@ -121,6 +123,9 @@ def sentence(e):
     if e["cls"] == "over_lap_cap":
         return (f"In {z} ({when}) the lap's harvest limit was already {e['harvest']:.2f} MJ used. "
                 f"v1 stopped harvesting at the limit; v2 still asked for up to {e['p2max']:.0f} kW.")
+    if e["cls"] == "over_motor":
+        return (f"In {z} ({when}) the motor was hot enough to limit itself; v1 respected the limit, "
+                f"v2 still asked for up to {e['p2max']:.0f} kW of motor braking.")
     if e["cls"] == "shadow_missing":
         return (f"From {e['t0']:.1f} s to {e['t1']:.1f} s ({e['n']} frames) v2 gave no answer. "
                 f"v1 kept braking normally; these frames are marked as gaps, not as agreement.")
@@ -224,6 +229,51 @@ def fault_chart(d, name):
     return png(fig)
 
 
+def sweep_section(csv_path, summary_path):
+    import csv as _csv
+    rows = list(_csv.DictReader(open(csv_path)))
+    summ = json.load(open(summary_path)) if os.path.exists(summary_path) else {}
+    n = len(rows)
+
+    def pct(rs, key):
+        return 100.0 * sum(int(r[key]) > 0 for r in rs) / max(1, len(rs))
+
+    grip_bins = [(0.85, 0.90), (0.90, 0.95), (0.95, 0.99), (0.99, 1.06)]
+    air_bins = [(10, 20), (20, 30), (30, 40), (40, 46)]
+    fig, axes = plt.subplots(1, 3, figsize=(10, 2.8))
+    ax = axes[0]
+    vals = [pct([r for r in rows if lo <= float(r["grip"]) < hi], "ep_lock_low_grip") for lo, hi in grip_bins]
+    ax.bar([f"{lo:.2f}-{hi:.2f}" for lo, hi in grip_bins], vals, color="#D85A30")
+    ax.set_title("Rear lock risk (low grip)\n% of laps, by track grip", fontsize=9, loc="left")
+    ax = axes[1]
+    vals = [pct([r for r in rows if lo <= float(r["ambient_c"]) < hi], "ep_over_motor") for lo, hi in air_bins]
+    ax.bar([f"{lo}-{hi} C" for lo, hi in air_bins], vals, color="#993556")
+    ax.set_title("Hot-motor overreach\n% of laps, by air temperature", fontsize=9, loc="left")
+    ax = axes[2]
+    laps = sorted({r["lap"] for r in rows}, key=int)
+    vals = [pct([r for r in rows if r["lap"] == L], "ep_over_motor") for L in laps]
+    ax.bar([f"lap {L}" for L in laps], vals, color="#993556")
+    ax.set_title("Hot-motor overreach\n% of laps, by lap of the run", fontsize=9, loc="left")
+    for ax in axes:
+        ax.set_ylim(0, 105)
+        style(ax)
+        ax.tick_params(labelsize=7)
+    img = png(fig)
+    v1 = summ.get("v1_harvest_mj_per_lap", 0)
+    v2 = summ.get("v2_safe_harvest_mj_per_lap", 0)
+    return (f"<h2>Across {n} laps in changing conditions</h2>"
+            f"<p>The fast sweep (<code>bbw_sweep</code>) replays the lap {n} times with the same car model and both brains, "
+            f"varying the starting battery, air temperature and track grip. It answers how often v2 would be unsafe, "
+            f"not just whether it was on one lap.</p>"
+            f"<div class='finding'>v2 was unsafe for at least 50 ms on <b>{summ.get('laps_with_unsafe_v2', '?')}</b> of {n} laps. "
+            f"It risked locking the rear wheels while the wings were still closing on {summ.get('laps_with_lock_while_wings_close', '?')} laps, "
+            f"on a low-grip track on {summ.get('laps_with_lock_low_grip', '?')} laps, and over-asked a hot motor on "
+            f"{summ.get('laps_with_hot_motor_overreach', '?')} laps.</div>"
+            f"<img src='{img}' alt='sweep charts'>"
+            f"<p>Energy per lap: v1 harvested {v1:.2f} MJ; using v2's choices only where they were safe would give {v2:.2f} MJ "
+            f"({(v2 - v1) / v1 * 100 if v1 else 0:+.1f}%). v2's gain is small and its risks are not.</p>")
+
+
 CSS = """
 body{font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:#1f1f1d;background:#fafaf8;margin:0}
 main{max-width:980px;margin:0 auto;padding:40px 24px 80px}
@@ -312,6 +362,11 @@ def main():
             col = CLASS_COLORS.get(e["cls"], "#888780")
             parts.append(f"<div class='finding'><span class='tag' style='background:{col}'>"
                          f"{e['cls'].replace('_', ' ')}</span>{html.escape(sentence(e))}</div>")
+
+    # ---- many laps (bbw_sweep) ----
+    sw = os.path.join(a.outdir, "sweep", "laps.csv")
+    if os.path.exists(sw):
+        parts.append(sweep_section(sw, os.path.join(a.outdir, "sweep", "summary.json")))
 
     # ---- AI analyst ----
     am = os.path.join(a.outdir, main_run, "analyst.md")

@@ -15,6 +15,8 @@ static bbw_frame_t frame(double v_kmh, double a, double soc, double harvest) {
     f.lap_harvest_j = harvest;
     f.f_rear_req = CAR_REAR_BRAKE_SHARE * CAR_MASS_KG * a;
     f.f_rear_grip = car_rear_grip(f.v);
+    f.motor_temp_c = 80;
+    f.wing_closed = 1;
     return f;
 }
 
@@ -31,6 +33,7 @@ int main(void) {
                     strategy_v1(&f, &a);
                     double p = a.f_regen * f.v;
                     if (p > car_regen_power_limit(soc, h) * 1.0001 + 1) fails++;
+                    if (a.f_regen > car_motor_force_limit(f.v, f.motor_temp_c, 1) + 1e-6) fails++;
                     if (a.f_regen + a.f_friction > f.f_rear_grip) fails++;
                     if (a.f_regen < 0 || a.f_friction < -1e-6) fails++;
                 }
@@ -66,6 +69,20 @@ int main(void) {
     assert(c == DIS_REAR_LOCK_RISK);
 
     assert(classify(&f, &a, &b, 0, 50) == DIS_SHADOW_MISSING);
+
+    /* hot motor: v1 backs off, v2 ignores the temperature limit */
+    f = frame(250, 30, 0.5, 0.5e6);
+    f.motor_temp_c = 150;
+    strategy_v1(&f, &a); strategy_v2(&f, &b);
+    c = classify(&f, &a, &b, 1, 50);
+    printf("motor 150C: limit %.0f N, v1 regen %.0f N, v2 regen %.0f N -> %s\n",
+           car_motor_force_limit(f.v, 150, 1), a.f_regen, b.f_regen, dis_name(c));
+    assert(a.f_regen <= car_motor_force_limit(f.v, 150, 1) + 1e-6);
+    assert(c == DIS_OVER_MOTOR);
+
+    /* wings still open at the start of braking: less grip than with them closed */
+    assert(car_rear_grip_aero(80, 0.0, 1.0) < car_rear_grip_aero(80, 1.0, 1.0));
+    assert(fabs(car_rear_grip_aero(80, 1.0, 1.0) - car_rear_grip(80)) < 1e-6);
     printf("test_control: ok\n");
     return 0;
 }

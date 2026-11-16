@@ -1,0 +1,50 @@
+# Every push: build, run the tests, then run the shadow evidence and post a
+# release verdict for v2 in the job summary. Free on public repositories.
+name: shadow-gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Unit tests
+        run: make test
+
+  shadow-gate:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python tools
+        run: pip install numpy matplotlib
+      - name: Build
+        run: make
+      - name: Many-lap sweep, candidate v2 (300 laps, varied battery, heat and grip)
+        run: build/host/bbw_sweep --lap data/lap_a.csv --runs 100 --laps 3 --seed 1 --out out/sweep
+      - name: Many-lap sweep, candidate v2.1 (the fixed version)
+        run: build/host/bbw_sweep --lap data/lap_a.csv --runs 100 --laps 3 --seed 1 --candidate v2.1 --out out/sweep-v2.1
+      - name: Live shadow run (20 s, real processes and timing)
+        run: SECONDS_MAX=20 sh scripts/run_demo.sh shadow out
+      - name: Report
+        run: python3 tools/report.py out
+      - name: Verdict for v2
+        run: python3 tools/gate.py out/sweep/summary.json
+      - name: Verdict for v2.1
+        run: python3 tools/gate.py out/sweep-v2.1/summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shadow-evidence
+          path: |
+            out/report.html
+            out/sweep/
+            out/sweep-v2.1/
+            out/shadow/summary.json
