@@ -1,0 +1,3 @@
+[comparer] real-time: SCHED_FIFO 20, cpu 1, memory locked
+[comparer] writing out/repeat/run2/flood/compare.csv
+[comparer] done: 8914 rows, v1 misses 0, plant overruns 3, v1 latency p99 177.6 us, max 619.5 us

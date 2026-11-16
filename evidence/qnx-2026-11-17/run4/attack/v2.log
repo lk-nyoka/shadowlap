@@ -1,0 +1,10 @@
+[v2] ATTACK BLOCKED: open the brake actuator /dev/bbw/actuator -> Permission denied
+[v2] ATTACK BLOCKED: open v1's region /bbw_prod -> Permission denied
+[v2] ATTACK BLOCKED: open the evidence region /bbw_rec -> Permission denied
+[v2] ATTACK BLOCKED: open its input region /bbw_shin for writing -> Permission denied
+[v2] ATTACK BLOCKED: signal v1 (stop or kill it) -> Operation not permitted
+[v2] ATTACK BLOCKED: raise its priority above v1's -> Operation not permitted
+[v2] note: highest priority v2 can reach is 63; v1 runs at 65, the car at 70
+[v2] ATTACK CONTAINED: move onto v1's CPU -> allowed, but v1 (65) and the car (70) out-rank anything v2 can reach (63)
+[v2] attack: spinning on v1's CPU at priority 63 for 30 s while the lap runs
+attack exit code: 137

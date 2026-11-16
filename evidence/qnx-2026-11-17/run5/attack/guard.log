@@ -1,0 +1,4 @@
+[guard] real-time: SCHED_FIFO 64, cpu -1, memory locked
+[guard] watching pid 3575835: budget 40% of one CPU over 1000 ms
+[guard] BUDGET EXCEEDED: pid 3575835 used 98% of a CPU over the last 1000 ms (budget 40%) -> candidate stopped (SIGKILL)
+[guard] containment: candidate ran hot for 968 ms before it was stopped (design limit: about 1050 ms)

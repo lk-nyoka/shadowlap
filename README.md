@@ -109,6 +109,23 @@ limits either way.
 
 ### Results on QNX 8.0
 
+**Repeated runs (17 November, current code).** Five full laps of each
+scenario, 8,914 frames each (133,710 frames in all), candidate as `qnxuser`,
+made with `scripts/repeat.sh` and summarised by `tools/timing_table.py`:
+
+| Scenario | Runs | v1 misses (total) | Host stalls min / median / max | v1 p99 median | v1 worst median / max | Guard containment |
+|---|---|---|---|---|---|---|
+| shadow | 5 | 0 | 0 / 4 / 23 | 211 µs | 1.10 / 2.67 ms | |
+| CPU flood on the shadow side | 5 | 0 | 2 / 4 / 325 | 182 µs | 0.86 / 3.50 ms | |
+| hostile candidate (7 routes, then burns v1's CPU) | 5 | 0 | 1 / 11 / 19 | 214 µs | 1.21 / 4.45 ms | 968–969 ms |
+
+Deadline 8 ms: the worst v1 answer in 15 laps left 3.55 ms of margin. Host
+stalls swing from run to run (one flood run had 325) with no v1 misses,
+which is the Windows host pausing the VM, not the scenario. In every attack
+run the guard stopped the candidate at 98% of a CPU after 968–969 ms.
+
+**Single runs of all seven scenarios** (16 November):
+
 Measured 16 November on the current code. Real Monza lap (7,933 frames, one
 every 10 ms), hot day with worn tyres (grip 90%, 42 °C, battery 88%), QNX SDP
 8.0 in QEMU (2 CPUs) on a Windows 11 laptop. The car and v1 pinned to CPU 0

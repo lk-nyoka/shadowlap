@@ -1,0 +1,3 @@
+[plant] real-time: SCHED_FIFO 70, cpu 0, memory locked
+[plant] 8914 samples (89.1s lap), 1 lap(s); starting in 2500 ms
+[plant] done: 8914 cycles, 0 v1 deadline misses, 4 plant overruns (host/OS late), 0 clamps, 0 fallbacks limited by grip, 0 actuator commands rejected, 0 records dropped

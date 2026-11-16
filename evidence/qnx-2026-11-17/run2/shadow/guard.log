@@ -1,0 +1,3 @@
+[guard] real-time: SCHED_FIFO 64, cpu -1, memory locked
+[guard] watching pid 1257499: budget 40% of one CPU over 1000 ms
+[guard] pid 1257499 ended within budget (peak 3.0% of a CPU)

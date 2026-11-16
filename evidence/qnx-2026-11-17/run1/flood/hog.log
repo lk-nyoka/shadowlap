@@ -1,0 +1,2 @@
+[hog] 4 threads for 120 s at priority 10
+[hog] real-time: SCHED_FIFO 10, cpu 1, memory locked

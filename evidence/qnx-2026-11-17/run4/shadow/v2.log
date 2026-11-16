@@ -1,0 +1,3 @@
+[v2] warning: mlockall (memory lock) not set (Operation not permitted)
+[v2] shadowing as candidate v2 (pid 2519067), inputs mapped read-only
+[v2] done: 8914 frames shadowed, 0 lost

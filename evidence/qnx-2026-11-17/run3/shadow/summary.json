@@ -1,0 +1,21 @@
+{
+  "schema": 2,
+  "cycles": 8914,
+  "v1_deadline_misses": 0,
+  "plant_overruns": 4,
+  "v1_clamped": 0,
+  "v1_latency_us": {"p50": 37.6, "p99": 191.3, "p999": 491.3, "max": 2436.1},
+  "shadow_frames_dropped": 0,
+  "v2_coverage": 1.00000,
+  "v2_invalid_outputs": 0,
+  "actuator_rejects": 0,
+  "fallbacks": 0,
+  "realtime": {"plant": true, "v1": true},
+  "peak_rear_grip_use": {"v1": 0.950, "v2": 1.199},
+  "worst_extra_speed_kmh": {"v1": 0.00, "v2": 0.00},
+  "worst_extra_distance_m": {"v1": 0.00, "v2": 0.00},
+  "classes": {"agree": 8280, "within_limits": 448, "over_battery": 144, "over_lap_cap": 0, "rear_lock_risk": 42, "over_motor": 0, "demand_not_met": 0, "shadow_missing": 0},
+  "v1_limit_breaks": {"over_battery": 0, "over_lap_cap": 0, "rear_lock_risk": 0, "over_motor": 0, "demand_not_met": 0},
+  "valid_evidence": true,
+  "invalid_because": []
+}
