@@ -26,35 +26,46 @@ circuit). v2 is designed to harvest more energy. The report finds it:
 
 …while v1 keeps braking on time.
 
-### Results so far (not QNX yet)
+### Results on QNX 8.0
 
-Full laps, 9,016 frames each. A **v1 miss** means v1 had its full 8 ms after
-receiving a frame and still didn't answer. A **host stall** means the
-operating system woke the simulated car more than 2 ms late.
+Full laps, 9,016 frames each, QNX 8.0 in QEMU (2 CPUs) on a Windows 11 laptop.
+v1 and the car pinned to CPU 0, v2 to CPU 1, v2 running as an unprivileged
+user (`V2_USER=qnxuser`).
 
-**Linux (cloud container):**
+A **v1 miss** means v1 had its full 8 ms after receiving a frame and still
+didn't answer. A **host stall** means the simulated car itself was woken more
+than 2 ms late (QNX here runs inside a VM on Windows, which still pauses it).
 
-| Scenario | v1 misses | Host stalls | v1 p99 latency | v2 gaps |
+| Scenario | v1 misses | Host stalls | v1 p99 | v1 worst |
 |---|---|---|---|---|
-| baseline (no shadow) | 0 | 32 | 250 µs | n/a |
-| shadow | 0 | 20 | 267 µs | 0 |
-| v2 crashes | 2 | 5 | 219 µs | 8,128 |
-| v2 hangs 2 s | 0 | 8 | 263 µs | 100 |
-| v2 SIGSTOPped 2 s | 0 | 9 | 247 µs | 99 |
-| CPU flood on shadow side | 1 | 13 | 124 µs | 0 |
-| v2 attacks the actuator | 1 | 38 | 265 µs | n/a |
+| baseline (no shadow) | 0 | 58 | 237 µs | 1.13 ms |
+| shadow | 0 | 48 | 597 µs | 1.96 ms |
+| v2 crashes | 0 | 26 | 347 µs | 1.77 ms |
+| v2 hangs 2 s | 0 | 53 | 615 µs | 2.10 ms |
+| v2 SIGSTOPped 2 s | 0 | 15 | 544 µs | 1.23 ms |
+| CPU flood on shadow side | 0 | 13 | 185 µs | 0.88 ms |
+| v2 attacks the actuator | 0 | 7 | 246 µs | 1.56 ms |
 
-The 2 misses in the crash run happened 21 s after the crash, back to back,
-so they are host jitter, not caused by v2. On Linux the attack is **not**
-blocked: v2's write displaced v1's command for one frame (the plant fell back
-to disc-only braking; v2's command was never applied). Stopping that is the
-job of QNX permissions and security policy.
+**The attack is blocked by the OS:**
+`[v2] ATTACK BLOCKED: opening /dev/bbw/actuator failed: Permission denied`
 
-**Windows 11 laptop (Ubuntu in WSL), one shadow lap with real-time priority:**
-40 v1 misses and 82 host stalls, in bursts. Windows pauses the whole Ubuntu
-virtual machine, and real-time priority inside a VM can't prevent that.
+The first shadow run gave 2 v1 misses with 337 host stalls, far more stalls
+than any other run; a rerun gave the row above. We read the first as the
+Windows host being busy, and keep both in the record.
 
-**QNX:** next. These are the numbers the submission should quote.
+### Same laptop, same code, without QNX
+
+| | Ubuntu in WSL (real-time priority) | QNX 8.0 in QEMU |
+|---|---|---|
+| v1 deadline misses (shadow lap) | 40 | **0** |
+| Host stalls | 82 | 48 |
+| v1 worst response | 7.96 ms | **1.96 ms** |
+| v2 attacks the brakes | not blocked | **blocked** |
+
+On Linux in a cloud container (no Windows underneath) v1 also stayed at 0–2
+misses, but nothing stopped the attack: v2's write displaced v1's command for
+one frame (the car fell back to disc-only braking; v2's command was never
+applied).
 
 ## How it works
 
@@ -152,8 +163,9 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
 - Shadow mode is open-loop: v2 sees a battery shaped by v1's choices.
 - F1 cars use a standard control unit; this is a development and test-rig tool.
   The same approach applies to any EV or hybrid with blended braking.
-- Not yet verified on QNX: the resource manager, CPU pinning, `on -u`, and the
-  security-policy steps. Their code and steps follow QNX 8.0 documentation.
+- Verified on QNX 8.0 (QEMU): the actuator resource manager, real-time
+  priorities, CPU pinning and running v2 as another user. Not yet run: the
+  security-policy steps (docs/security-policy.md) and real hardware (Raspberry Pi).
 - The AI analyst's checker is tested; a review from a real model is not yet in the repo.
 
 ## License
