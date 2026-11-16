@@ -21,7 +21,7 @@ CORNERS = [
     (5000, 200, 120, 0.82),  # long final corner
 ]
 # must match src/control.h
-MASS, G, MU, DOWNFORCE_K = 800.0, 9.81, 1.6, 2.0
+MASS, G, MU, DOWNFORCE_K = 800.0, 9.81, 1.8, 4.0
 LAP_M = 5793
 
 

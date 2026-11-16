@@ -4,3 +4,4 @@ out-*/
 .venv/
 __pycache__/
 data/lap_real*.csv
+data/lap_openf1_*

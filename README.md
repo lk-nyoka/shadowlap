@@ -17,23 +17,38 @@ The output is evidence: every moment the two disagreed, why, and how serious it 
 
 ## What it looks like
 
-A full lap of Track A (a synthetic lap shaped like a fast, low-downforce
-circuit). v2 is designed to harvest more energy. The report finds it:
+The dashboard replays a **real F1 lap** (Monza 2024 qualifying pole, 1:19.327,
+from free public timing data) and shows, moment by moment:
 
-- risks locking the rear wheels: in the hardest braking zone, and at the end
-  of the long straight while the F1-style wings are still closing,
-- overcharges a nearly full battery,
-- keeps harvesting after the lap's energy limit is used up,
-- over-asks the motor once it gets hot (on later laps and hot days),
+- **the car on a map of the real circuit**, drawn from its real position data,
+  with braking zones marked and dots where v2 got it wrong;
+- **the rear brakes right now**: what the driver asks for, how v1 (in charge)
+  splits it between motor and discs, how v2 (in shadow) would have split it,
+  against the tyre-grip limit;
+- **one plain sentence** saying what is happening, e.g. *"Braking from 331 km/h
+  at 5.1 g. v2 would ask the rear tyres for more than they can grip: the rear
+  wheels could lock. v1 stays under the limit."*
 
-…while v1 keeps braking on time.
+Pick the **conditions** at the top (normal day, worn tyres, hot day, or
+both). On a normal day v2's flaws stay hidden; with hot weather and worn tyres
+the same lap shows v2 risking a rear lock at the first braking zone (about 9 s
+in) and over-asking a hot motor later in the lap, while v1 stays safe.
 
-**Across 600 laps** in changing conditions (battery 50–92%, air 10–45 °C,
-track grip 85–105%), run in under a second by `bbw_sweep`: v2 is unsafe on
-600 of 600 laps; rear-lock risk on low grip depends on the track (100% of laps
-below 99% grip, 2% above); hot-motor overreach rises from 1% on lap 1 to 75%
-on lap 3. **v2.1**, the version with those flaws fixed, is unsafe on 0 of 300
-laps, and the release gate approves it.
+What is real: speed, throttle, brake on/off, track position, lap time. What
+is modelled: battery, motor, wings, grip and forces, with grip and downforce
+fitted so the real pole lap uses up to 93% of the modelled grip at its hardest
+braking (5.6 g).
+
+**Across 600 laps of that real lap** in changing conditions (battery 50–92%,
+air 10–45 °C, track grip 85–105%), run in under a second by `bbw_sweep`:
+
+| Finding | Depends on | Result |
+|---|---|---|
+| v2 risks locking the rear wheels | track grip | 100% of laps at 85–92% grip, 93% at 92–99%, 0% at normal grip |
+| v2 over-asks a hot motor | air temperature | 37% of laps at 10–25 °C, 67% at 25–35 °C, 96% at 35–45 °C |
+| v2 over-asks a hot motor | lap of the run | 27% on lap 1, 84% on lap 2, 82% on lap 3 |
+| v2 overall | | unsafe on 600 of 600 laps: **rejected** |
+| v2.1 (flaws fixed) | | unsafe on 0 of 600 laps: **approved** |
 
 ### Results on QNX 8.0
 
@@ -170,8 +185,16 @@ Build and run details:
 - **Target**: QEMU x86_64 (`mkqnximage --type=qemu`); Raspberry Pi 4/5 should work with `QNX_ARCH=aarch64le`
 - **Toolchain**: `qcc -Vgcc_ntox86_64` / `-Vgcc_ntoaarch64le`
 
-Use a real lap instead of the synthetic one (FastF1 may now need a free F1TV
-login; not tested yet, see the note at the top of the script):
+Get the real lap (free, no account; files stay out of the repo):
+
+```bash
+python3 tools/fetch_openf1_lap.py --year 2024 --circuit Monza --session Qualifying
+build/host/bbw_sweep --lap data/lap_openf1_monza_2024_4.csv --runs 200 --laps 3 --out out/sweep
+```
+
+The dashboard picks a real lap automatically when one is in `data/`.
+
+Or with FastF1 (may now need a free F1TV login; not tested yet):
 
 ```bash
 pip install fastf1
@@ -194,7 +217,7 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
 | `src/comparer.c` | joins v1/v2 per frame, writes the evidence |
 | `src/hog.c` | CPU burner for the flood test |
 | `scripts/run_demo.sh` | the seven scenarios |
-| `tools/` | live dashboard, lap from video (`lapgen.py`), synthetic lap, FastF1 import, HTML report, AI analyst, QNX live link |
+| `tools/` | live dashboard, real-lap import (`fetch_openf1_lap.py`), lap from video (`lapgen.py`), synthetic lap, FastF1 import, HTML report, AI analyst, QNX live link |
 | `tests/` | ring buffer stress test, strategy tests |
 
 ## Honest limits

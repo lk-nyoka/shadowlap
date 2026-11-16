@@ -30,7 +30,11 @@ energy limit, or ask the rear tyres for more grip than they have.
   is safe. It shows the end of the story: the evidence found the flaws, the fix
   removes them, and the release gate approves it.
 
-### What the car model includes (all illustrative numbers)
+### What the car model includes
+
+Grip and downforce are fitted to a real pole lap (Monza 2024 qualifying): the
+real lap uses up to 93% of the modelled grip at its hardest braking, 5.6 g.
+The other numbers are illustrative.
 
 - **Battery:** accepts less charge as it fills; a per-lap harvest limit.
 - **Motor (electrical):** a torque limit at low speed and a power limit above

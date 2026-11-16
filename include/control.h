@@ -11,8 +11,8 @@
 #define CAR_MASS_KG          800.0
 #define CAR_G                9.81
 #define CAR_REAR_BRAKE_SHARE 0.42     /* share of braking done by the rear axle */
-#define CAR_MU               1.6      /* tyre friction coefficient */
-#define CAR_DOWNFORCE_K      2.0      /* downforce N per (m/s)^2, whole car */
+#define CAR_MU               1.8      /* tyre friction coefficient (fitted to a real pole lap) */
+#define CAR_DOWNFORCE_K      4.0      /* downforce N per (m/s)^2, whole car (fitted to a real pole lap) */
 #define MGU_MAX_W            350e3    /* motor power limit */
 #define BATT_USABLE_J        4.0e6    /* usable battery window */
 #define BATT_CHARGE_EFF      0.92

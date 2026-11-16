@@ -39,9 +39,17 @@ sys.path.insert(0, TOOLS)
 import lapgen  # noqa: E402
 
 FIELDS = ["seq", "t_lap", "zone", "v_kmh", "soc", "lap_harvest_mj", "v1_regen", "v1_applied",
-          "v1_latency_us", "v2_present", "v2_regen", "class", "f_rear_grip", "plant_lag_us"]
+          "v1_latency_us", "v2_present", "v2_regen", "class", "f_rear_grip", "plant_lag_us",
+          "v1_friction", "v2_friction", "f_rear_req", "a_req", "brake", "motor_temp_c", "wing_closed"]
 SCENARIOS = ["shadow", "crash", "freeze", "sigstop", "flood", "attack", "baseline"]
 CANDIDATES = ["v2", "v2.1"]
+# Track conditions for a live lap. Fixed list, so nothing typed in the browser reaches a shell.
+CONDITIONS = {
+    "normal": ("Normal day: full grip, 30 °C, battery 80%", "--grip 1.0 --ambient 30 --soc0 0.80"),
+    "worn":   ("Worn tyres: 90% grip, 30 °C", "--grip 0.90 --ambient 30 --soc0 0.80"),
+    "hot":    ("Hot day: 42 °C, battery 88%", "--grip 1.0 --ambient 42 --soc0 0.88"),
+    "tough":  ("Hot day + worn tyres: 90% grip, 42 °C, battery 88%", "--grip 0.90 --ambient 42 --soc0 0.88"),
+}
 START_DELAY_MS = 1500
 
 
@@ -67,6 +75,41 @@ def lap_info(path):
     return {"name": name, "label": label, "duration": round(dur, 2), **meta}
 
 
+def lap_geometry(name):
+    """Track map for a lap: real x,y when the lap has them, else a schematic loop by distance."""
+    path = os.path.join(ROOT, "data", re.sub(r"[^A-Za-z0-9_.-]", "", name) + ".csv")
+    if not os.path.exists(path):
+        return None
+    t, d, x, y, br = [], [], [], [], []
+    with open(path) as fp:
+        head = fp.readline().strip().split(",")
+        has_xy = "x" in head and "y" in head
+        ix = head.index("x") if has_xy else -1
+        iy = head.index("y") if has_xy else -1
+        for i, line in enumerate(fp):
+            if i % 5:
+                continue                     # 20 points a second is plenty for a map
+            v = line.strip().split(",")
+            if len(v) < 6:
+                continue
+            t.append(float(v[0]))
+            d.append(float(v[1]))
+            br.append(int(v[4]))
+            if has_xy:
+                x.append(float(v[ix]))
+                y.append(float(v[iy]))
+    if not t:
+        return None
+    if not has_xy:                           # schematic: a rounded loop, position by distance
+        import math
+        total = d[-1] or 1.0
+        for di in d:
+            a = 2 * math.pi * di / total
+            x.append(1000 * math.cos(a) * (1.4 + 0.25 * math.cos(3 * a)))
+            y.append(600 * math.sin(a))
+    return {"name": name, "real": has_xy, "t": t, "x": x, "y": y, "brake": br}
+
+
 def list_laps():
     return [lap_info(p) for p in sorted(glob.glob(os.path.join(ROOT, "data", "*.csv")))]
 
@@ -90,11 +133,14 @@ class Runner:
         os.makedirs(os.path.join(ROOT, self.outdir), exist_ok=True)
         return open(os.path.join(ROOT, self.outdir, name), "w")
 
-    def start(self, scenario, target, lap, candidate="v2"):
+    def start(self, scenario, target, lap, candidate="v2", cond="normal"):
         if scenario not in SCENARIOS:
             return False, "unknown scenario"
         if candidate not in CANDIDATES:
             return False, "unknown candidate"
+        if cond not in CONDITIONS:
+            return False, "unknown conditions"
+        plant_args = CONDITIONS[cond][1]
         lap_path = os.path.join(ROOT, "data", lap + ".csv")
         if not os.path.exists(lap_path):
             return False, "lap not found"
@@ -106,7 +152,8 @@ class Runner:
             info = lap_info(lap_path)
             if target == "local":
                 out = os.path.join(ROOT, self.outdir)
-                env = dict(os.environ, LAP=lap_path, START_DELAY_MS=str(START_DELAY_MS), CANDIDATE=candidate)
+                env = dict(os.environ, LAP=lap_path, START_DELAY_MS=str(START_DELAY_MS), CANDIDATE=candidate,
+                           PLANT_ARGS=plant_args)
                 self.watch = os.path.join(out, scenario, "compare.csv")
                 self._clear(self.watch)
                 self.proc = subprocess.Popen(
@@ -132,12 +179,13 @@ class Runner:
                     start_new_session=True)
                 time.sleep(0.8)                     # let the follower start watching
                 remote = (f"cd {shlex.quote(rdir)} && LAP=data/lap_live.csv START_DELAY_MS={START_DELAY_MS} CANDIDATE={candidate} "
+                          f"PLANT_ARGS={shlex.quote(plant_args)} "
                           f"V2_USER=qnxuser PROD_CPU=0 SHADOW_CPU=1 sh run_demo.sh {scenario} out")
                 self.proc = subprocess.Popen(
                     ["ssh", "-tt", "-o", "BatchMode=yes", user_host, remote],
                     stdin=subprocess.DEVNULL, stdout=self._log("dashboard-run-qnx.log"),
                     stderr=subprocess.STDOUT, start_new_session=True)
-            self.state = {"running": True, "target": target, "scenario": scenario, "lap": lap, "candidate": candidate,
+            self.state = {"running": True, "target": target, "scenario": scenario, "lap": lap, "candidate": candidate, "cond": cond,
                           "lap_duration": info["duration"], "message": "starting", "started": time.time()}
             threading.Thread(target=self._wait, args=(self.proc, self.gen), daemon=True).start()
         return True, "started"
@@ -250,6 +298,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/laps"):
             return self._json({"laps": list_laps(), "scenarios": SCENARIOS,
                                "qnx": self.runner.qnx})
+        if self.path.startswith("/api/lapgeo"):
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            g = lap_geometry((q.get("lap") or ["lap_a"])[0])
+            return self._json(g or {"error": "no such lap"}, 200 if g else 404)
         if self.path.startswith("/api/status"):
             return self._json(self.runner.state)
         body = PAGE.encode()
@@ -263,7 +316,8 @@ class Handler(BaseHTTPRequestHandler):
         b = self._body()
         if self.path.startswith("/api/start"):
             ok, msg = self.runner.start(b.get("scenario", "shadow"), b.get("target", "local"),
-                                        b.get("lap", "lap_a"), b.get("candidate", "v2"))
+                                        b.get("lap", "lap_a"), b.get("candidate", "v2"),
+                                        b.get("cond", "normal"))
             return self._json({"ok": ok, "message": msg, "state": self.runner.state}, 200 if ok else 400)
         if self.path.startswith("/api/stop"):
             self.runner.stop()
@@ -382,12 +436,20 @@ canvas{width:100%;display:block}
 .mono{font:11px ui-monospace,Menlo,monospace;color:var(--mut);margin-top:6px}
 #calib{display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
 .foot{color:var(--mut);font-size:12px;padding:0 28px 24px}
+.top{display:grid;grid-template-columns:1.25fr 1fr;gap:16px;padding:0 28px 8px}
+.story{font-size:15px;line-height:1.5;min-height:46px;margin:2px 0 12px}
+.split{display:grid;grid-template-columns:150px 1fr 110px;gap:10px;align-items:center;margin:8px 0}
+.split .lbl{font-size:12px;color:var(--mut)}.split .lbl b{color:var(--txt)}.split .val{font:12px ui-monospace,Menlo,monospace;text-align:right}
+.bar{position:relative;height:22px;background:#0b0b0c;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.bar i{position:absolute;top:0;bottom:0}.bar .lim{width:2px;background:#fff;opacity:.9}.bar.risk{border-color:var(--bad);box-shadow:0 0 0 1px var(--bad)}
+.mini{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-top:10px}.mini b{color:var(--txt);font-weight:600}
 </style></head><body>
 <header><h1>Shadow Lap</h1><span class="scn" id="scn"><span class="live" id="dot"></span><span id="scnt">waiting for a run</span></span>
  <div class="ctl">
   <select id="lap" title="lap"></select>
   <select id="target" title="where to run"><option value="local">This PC</option><option value="qnx">QNX</option></select>
   <select id="scen" title="scenario"></select>
+  <select id="cond" title="track conditions"><option value="normal">Normal day</option><option value="worn">Worn tyres (90% grip)</option><option value="hot">Hot day (42 °C)</option><option value="tough">Hot day + worn tyres</option></select>
   <select id="cand" title="candidate brake software"><option value="v2">candidate v2</option><option value="v2.1">candidate v2.1 (fixed)</option></select>
   <button id="start">Start lap</button><button id="stop" class="ghost" disabled>Stop</button>
  </div></header>
@@ -399,6 +461,18 @@ canvas{width:100%;display:block}
  <div class="stat"><span>Host stalls</span><b id="s_ovr" class="ok">0</b></div>
  <div class="stat"><span>v1 latency now</span><b id="s_lat">-</b></div>
  <div class="stat"><span>v2 status</span><b id="s_v2">-</b></div>
+</div>
+<div class="top">
+ <div class="card"><h2 id="maph">The car on track</h2><canvas id="map" height="300"></canvas>
+  <div class="legend"><span><i style="background:#ececea"></i>track</span><span><i style="background:#ff6b3d"></i>braking zones</span><span><i style="background:#3ecf8e;height:8px;width:8px;border-radius:50%"></i>the car now</span><span>dots on the track: where v2 got it wrong</span></div></div>
+ <div class="card"><h2>Rear brakes right now</h2>
+  <div id="story" class="story">Press Start lap, or play a video, to begin.</div>
+  <div class="split"><div class="lbl">Driver asks the rear for</div><div class="val" id="b_req">-</div></div>
+  <div class="split"><div class="lbl"><b>v1</b> in charge (really brakes the car)</div><div class="bar" id="bar1"></div><div class="val" id="b_v1">-</div></div>
+  <div class="split"><div class="lbl"><b>v2</b> in shadow (only proposes)</div><div class="bar" id="bar2"></div><div class="val" id="b_v2">-</div></div>
+  <div class="legend"><span><i style="background:var(--v1)"></i>motor braking (charges the battery)</span><span><i style="background:#6b6b70"></i>brake discs (heat)</span><span><i style="background:#fff;width:2px;height:12px"></i>tyre grip limit</span></div>
+  <div class="mini"><span>Battery <b id="m_soc">-</b></span><span>Motor <b id="m_mot">-</b></span><span>Wings <b id="m_wing">-</b></span><span>Braking <b id="m_g">-</b></span></div>
+ </div>
 </div>
 <div class="grid">
  <div>
@@ -435,8 +509,8 @@ let R=[],misses=0,ovr=0,seen=new Set(),lastCls='agree',dirty=true,lastRowWall=0,
 function reset(s){R=[];misses=0;ovr=0;seen=new Set();lastCls='agree';lastRowWall=0;$('log').innerHTML='';
  $('scnt').textContent=s.scenario+(s.source==='qnx'?' · QNX':' · this PC')+(run&&run.candidate&&run.running?' · '+run.candidate:'');dirty=true;if(ready)setTimeout(()=>sync(true),200)}
 function add(rows){if(rows.length)lastRowWall=Date.now();for(const r of rows){
-  const [seq,t,zone,v,soc,mj,r1,app,lat,p2,r2,cls,grip,lag]=r;if(lag>2000)ovr++;
-  const o={seq,t,zone,v,soc,mj,k1:r1*v/3.6/1e3,app,lat,p2,k2:p2?r2*v/3.6/1e3:null,cls};R.push(o);if(!app)misses++;
+  const [seq,t,zone,v,soc,mj,r1,app,lat,p2,r2,cls,grip,lag,f1,f2,req,areq,brk,mot,wing]=r;if(lag>2000)ovr++;
+  const o={seq,t,zone,v,soc,mj,k1:r1*v/3.6/1e3,app,lat,p2,k2:p2?r2*v/3.6/1e3:null,cls,grip,r1,r2,f1,f2,req,areq,brk,mot,wing};R.push(o);if(!app)misses++;
   const key=cls+'@'+zone;
   if(cls!==lastCls&&cls!=='agree'&&cls!=='within_limits'&&!(zone>=0&&seen.has(key))){seen.add(key);const li=document.createElement('li');
    li.innerHTML=`<span class="tag" style="background:${COL[cls]}">${cls.replace(/_/g,' ')}</span>v2 ${TXT[cls]}<em>${t.toFixed(1)} s · ${zone>=0?'braking zone '+(zone+1):'on throttle'} · ${v.toFixed(0)} km/h · battery ${(soc*100).toFixed(0)}%</em>`;
@@ -467,24 +541,65 @@ function draw(){requestAnimationFrame(draw);if(!R.length){return}
  g.fillStyle='#3ecf8e';for(const o of R){const x=X(o.t,w,tmax);if(o.lat<0){g.fillStyle='#ff4d4d';g.fillRect(x-1,dy-6,3,12);g.fillStyle='#3ecf8e';continue}g.fillRect(x,h-18-(L(o.lat)-1)/3.3*(h-26),1.2,1.2)}
 }
 requestAnimationFrame(draw);addEventListener('resize',()=>{dirty=true});
+/* ---------- track map + rear-brakes panel ---------- */
+let geo=null,geoName=null;
+async function loadGeo(name){if(!name||name===geoName)return;geoName=name;
+ try{const r=await fetch('/api/lapgeo?lap='+encodeURIComponent(name));geo=r.ok?await r.json():null}catch(e){geo=null}
+ $('maph').textContent=geo?(geo.real?'The car on track (real position data)':'The car on track (schematic: this lap has no position data)'):'The car on track'}
+function geoAt(t){if(!geo)return null;const T=geo.t;let lo=0,hi=T.length-1;if(t<=T[0])return 0;if(t>=T[hi])return hi;
+ while(hi-lo>1){const m=(lo+hi)>>1;if(T[m]<=t)lo=m;else hi=m}return lo}
+function drawMap(){const c=$('map');let [g,w,h]=setup(c);if(!geo){g.fillStyle='#8b8b90';g.font='13px system-ui';g.fillText('Pick a lap to see the track.',16,30);return}
+ const X=geo.x,Y=geo.y;let x0=Math.min(...X),x1=Math.max(...X),y0=Math.min(...Y),y1=Math.max(...Y);
+ const pad=18,sc=Math.min((w-2*pad)/(x1-x0||1),(h-2*pad)/(y1-y0||1)),ox=(w-(x1-x0)*sc)/2,oy=(h-(y1-y0)*sc)/2;
+ const px=i=>ox+(X[i]-x0)*sc,py=i=>h-(oy+(Y[i]-y0)*sc);
+ g.lineCap='round';g.lineJoin='round';g.strokeStyle='#3a3a40';g.lineWidth=9;g.beginPath();X.forEach((_,i)=>i?g.lineTo(px(i),py(i)):g.moveTo(px(i),py(i)));g.stroke();
+ g.strokeStyle='#ececea';g.lineWidth=2;g.beginPath();X.forEach((_,i)=>i?g.lineTo(px(i),py(i)):g.moveTo(px(i),py(i)));g.stroke();
+ g.strokeStyle='#ff6b3d';g.lineWidth=4;for(let i=1;i<X.length;i++){if(geo.brake[i]&&geo.brake[i-1]){g.beginPath();g.moveTo(px(i-1),py(i-1));g.lineTo(px(i),py(i));g.stroke()}}
+ g.beginPath();g.fillStyle='#ececea';g.arc(px(0),py(0),4,0,7);g.fill();g.font='11px system-ui';g.fillText('start',px(0)+7,py(0)-6);
+ for(const o of R){if(o.cls==='agree'||o.cls==='within_limits')continue;const i=geoAt(o.t);if(i===null)continue;g.fillStyle=COL[o.cls];g.fillRect(px(i)-2,py(i)-2,4,4)}
+ const t=lapT();if(t!==null){const i=geoAt(t);g.beginPath();g.fillStyle='rgba(62,207,142,.25)';g.arc(px(i),py(i),13,0,7);g.fill();g.beginPath();g.fillStyle='#3ecf8e';g.arc(px(i),py(i),6,0,7);g.fill()}}
+function kN(f){return (f/1000).toFixed(1)+' kN'}
+function setBar(id,regen,fric,grip,scale,over){const b=$(id);const W=v=>Math.max(0,Math.min(100,v/scale*100))+'%';
+ b.innerHTML=`<i style="left:0;width:${W(regen)};background:var(--v1)"></i><i style="left:${W(regen)};width:${W(fric)};background:#6b6b70"></i><i class="lim" style="left:${W(grip)}"></i>`;b.classList.toggle("risk",!!over)}
+function story(o){if(!o.brk||o.req<1){return `On the throttle at <b>${o.v.toFixed(0)} km/h</b>. No braking, so nothing for the brake brains to decide.`}
+ const g=(o.areq/9.81).toFixed(1),base=`Braking from <b>${o.v.toFixed(0)} km/h</b> at <b>${g} g</b>. `;
+ if(!o.p2)return base+'v2 is not answering (crashed, frozen or behind). v1 keeps braking normally.';
+ const m=o.r1+o.f1>0?Math.round(o.r1/(o.r1+o.f1)*100):0;
+ switch(o.cls){case 'agree':return base+`Both brains agree: ${m}% of the rear braking from the motor, the rest from the discs.`;
+  case 'within_limits':return base+'v2 picks a different split, but a safe one.';
+  case 'rear_lock_risk':return base+'<span style="color:var(--bad)">v2 would ask the rear tyres for more than they can grip: the rear wheels could lock.</span> v1 stays under the limit.';
+  case 'over_battery':return base+'<span style="color:var(--warn)">v2 would charge the nearly full battery harder than it can take.</span> v1 eases off.';
+  case 'over_lap_cap':return base+'<span style="color:#9b8cff">v2 keeps harvesting after the lap\'s energy limit is used up.</span> v1 stops.';
+  case 'over_motor':return base+'<span style="color:#e05fa0">The motor is hot; v2 still asks it for full braking.</span> v1 backs off.';}
+ return base}
+function drawNow(){drawMap();if(!R.length)return;const t=lapT();let o=R[R.length-1];
+ if(t!==null&&o.t>t){for(let i=R.length-1;i>=0;i--){if(R[i].t<=t){o=R[i];break}}}
+ $('story').innerHTML=story(o);
+ const scale=Math.max(o.req*1.15,o.grip*1.05,o.r2+o.f2,1);
+ setBar('bar1',o.r1,o.f1,o.grip,scale,o.r1+o.f1>o.grip*1.001);setBar('bar2',o.p2?o.r2:0,o.p2?o.f2:0,o.grip,scale,o.p2&&o.r2+o.f2>o.grip*1.001);
+ $('b_req').textContent=o.brk?kN(o.req):'0 kN';$('b_v1').textContent=kN(o.r1)+' + '+kN(o.f1);$('b_v2').textContent=o.p2?kN(o.r2)+' + '+kN(o.f2):'no answer';
+ $('m_soc').textContent=(o.soc*100).toFixed(0)+'%';$('m_mot').textContent=o.mot.toFixed(0)+' °C';
+ $('m_wing').textContent=o.wing>=0.99?'corner mode':(o.wing<=0.01?'straight mode':'closing');$('m_g').textContent=o.brk?(o.areq/9.81).toFixed(1)+' g':'-'}
+(function loop(){try{drawNow()}catch(e){}setTimeout(()=>requestAnimationFrame(loop),66)})();
 /* ---------- run control ---------- */
 async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});return r.json()}
 async function loadLaps(select){const d=await api('/api/laps');laps=d.laps;
  const cur=select||$('lap').value;$('lap').innerHTML=laps.map(l=>`<option value="${l.name}">${l.label} · ${l.duration.toFixed(1)} s</option>`).join('');
  if(cur&&laps.some(l=>l.name===cur))$('lap').value=cur;
+ else{const real=laps.find(l=>l.name.startsWith('lap_openf1_'));if(real)$('lap').value=real.name}
  if(!$('scen').options.length)$('scen').innerHTML=d.scenarios.map(s=>`<option>${s}</option>`).join('');
  const q=$('target').querySelector('option[value=qnx]');q.disabled=!d.qnx;q.textContent=d.qnx?'QNX ('+d.qnx+')':'QNX (start dashboard with --qnx)';
  lapChanged()}
 function curLap(){return laps.find(l=>l.name===$('lap').value)}
-function lapChanged(){const l=curLap();if(!l)return;lapDur=l.duration;
+function lapChanged(){const l=curLap();if(!l)return;lapDur=l.duration;if(!run.running)loadGeo(l.name);
  if(l.video&&!$('yt').value){$('yt').value=l.video}
  if(l.offset!==undefined){$('off').value=l.offset;offset=l.offset}}
 $('lap').onchange=lapChanged;
 function showOver(msg){const o=$('over');o.textContent=msg||'';o.style.display=msg?'flex':'none'}
 async function startRun(){if(cal.on)return;showOver('Starting the lap…');$('start').disabled=true;
- const r=await api('/api/start',{lap:$('lap').value,target:$('target').value,scenario:$('scen').value,candidate:$('cand').value});
+ const r=await api('/api/start',{lap:$('lap').value,target:$('target').value,scenario:$('scen').value,candidate:$('cand').value,cond:$('cond').value});
  if(!r.ok){showOver('');$('start').disabled=false;$('vstat').textContent='could not start: '+r.message;return}
- run=r.state;lapDur=run.lap_duration||lapDur;setRunUi()}
+ run=r.state;lapDur=run.lap_duration||lapDur;loadGeo(run.lap);setRunUi()}
 async function stopRun(){await api('/api/stop',{});showOver('');if(player&&ready)player.pauseVideo&&player.pauseVideo()}
 $('start').onclick=()=>{if(ready){vPause();vSeek(offset)}startRun()};$('stop').onclick=stopRun;
 function setRunUi(){$('dot').className='live'+(run.running?' on':'');$('start').disabled=run.running||cal.on;$('stop').disabled=!run.running;
@@ -493,7 +608,7 @@ function setRunUi(){$('dot').className='live'+(run.running?' on':'');$('start').
 const es=new EventSource('/events');
 es.addEventListener('reset',e=>reset(JSON.parse(e.data)));
 es.addEventListener('rows',e=>{const rows=JSON.parse(e.data);const first=!R.length;add(rows);if(first&&rows.length){showOver('');if(ready)sync(true)}});
-es.addEventListener('status',e=>{const s=JSON.parse(e.data);const was=run.running;run=s;if(s.lap_duration)lapDur=s.lap_duration;setRunUi();
+es.addEventListener('status',e=>{const s=JSON.parse(e.data);const was=run.running;run=s;if(s.lap_duration)lapDur=s.lap_duration;if(s.lap)loadGeo(s.lap);setRunUi();
  if(was&&!s.running)$('vstat').textContent='lap '+(s.message||'ended')+(ready?' · the video is free to pause or scrub':'')});
 /* ---------- video ---------- */
 let player=null,ready=false,offset=0,kind=null,lastProg=0;
