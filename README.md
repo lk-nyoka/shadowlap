@@ -122,12 +122,14 @@ than 2 ms late (QNX here runs inside a VM on Windows, which can still pause it).
 | shadow | 0 | 0 | 168 µs | 1.22 ms |
 | v2 crashes | 0 | 0 | 209 µs | 0.62 ms |
 | v2 hangs 2 s | 0 | 0 | 160 µs | 0.59 ms |
-| v2 stopped from outside 2 s (SIGSTOP)* | 0 | 0 | 166 µs | 0.46 ms |
+| v2 stopped from outside 2 s (SIGSTOP)* | 0 | 0 | 190 µs | 0.54 ms |
 | CPU flood on the shadow side | 0 | 4 | 99 µs | 3.11 ms |
-| hostile v2 (7 routes, then burns v1's CPU for 30 s at priority 63) | 0 | 5 | 187 µs | 0.60 ms |
+| hostile v2 (7 routes, then burns v1's CPU at priority 63; stopped by the guard)* | 0 | 0 | 223 µs | 0.76 ms |
 
 Every scenario: 0 actuator commands rejected, 0 records dropped, 0 clamps.
-\* This run paused the launcher, not v2 (see below); to be re-run.
+\* Re-run 16 November after the launcher fix and the CPU-budget guard. The
+SIGSTOP run now pauses v2 itself (the same process ID the guard watched); in
+the attack run the guard stopped v2 when it reached 98% of a CPU (budget 40%).
 The earlier version (15 November, Track A, v1 at priority 45) also gave 0
 misses in all seven; one first shadow run then gave 2 misses with 337 host
 stalls, which we read as the Windows host being busy.
@@ -151,15 +153,17 @@ uses what QNX 8.0 offers instead: it reads the candidate's CPU-time clock
 from outside every 50 ms, at priority 64 (above anything v2 can reach), and
 stops the candidate if it uses more than 40% of a CPU over a second. On
 Linux the hostile v2 was stopped about a second into its CPU burn (98% of a
-CPU), with 0 v1 misses. The QNX re-run of this is next.
+CPU), with 0 v1 misses. **On QNX:** `[guard] BUDGET EXCEEDED: pid 2715673 used
+98% of a CPU over the last 1000 ms (budget 40%) -> candidate stopped
+(SIGKILL)`, with 0 v1 deadline misses in 7,933 frames.
 
 **A test that was not testing what it said.** QNX's `on -u` (and Linux's
 `runuser`) start the candidate as a *child* process, so the script's process
 ID was the launcher's. The old SIGSTOP scenario therefore paused the
 launcher, not v2. `bbw_runas` now drops to the unprivileged user and then
 *becomes* v2 (same process ID). On Linux the corrected scenario really pauses
-v2 (99 answers missing, recorded as gaps; 0 v1 misses). **The QNX SIGSTOP
-row below predates this fix and needs re-running.**
+v2 (99 answers missing, recorded as gaps; 0 v1 misses). Re-run on QNX with
+the fix: 0 v1 misses (table above).
 
 **Re-run on QNX with the fix (16 November):**
 
