@@ -129,15 +129,35 @@ The first shadow run gave 2 v1 misses with 337 host stalls, far more stalls
 than any other run; a rerun gave the row above. We read the first as the
 Windows host being busy, and keep both in the record.
 
-**The attack test (current code)** now tries seven routes and reports each.
-Run as an unprivileged user on Linux, six are blocked by the OS (the
-actuator, v1's memory, the evidence, writing its own inputs, signalling v1,
-raising its priority above v1's); moving onto v1's CPU is allowed, though v1
-still out-ranks it there. On QNX, an unprivileged process may by default use
-priorities up to 63, so raising v2 above v1 may well be allowed there: the
-fix is a CPU budget for the shadow (QNX adaptive partitioning) or a security
-policy, see [docs/security-policy.md](docs/security-policy.md). The re-run
-will record what QNX actually does.
+**The attack test (current code, run on QNX 16 November).** A hostile v2,
+running as `qnxuser`, tries seven routes and reports each. QNX blocked five:
+the brake actuator, v1's memory, the evidence, writing its own inputs, and
+signalling v1. Two were open: v2 could raise its priority above v1's (then
+45), and move onto v1's CPU. Together that would let it take v1's core.
+
+The cause is in QNX's design and so is the fix: unprivileged processes can
+use priorities 1 to 63, and 64 and up need the `PROCMGR_AID_PRIORITY`
+ability. The car (70) and v1 (65) now sit in that privileged band on QNX, so
+v2 tops out at 63, below both, whatever it does. The attack now also proves
+it: v2 climbs to the highest priority it can reach, moves onto v1's CPU and
+burns it for 30 seconds while the lap runs.
+
+**Re-run on QNX with the fix (16 November):**
+
+```
+[v2] ATTACK BLOCKED: open the brake actuator /dev/bbw/actuator -> Permission denied
+[v2] ATTACK BLOCKED: open v1's region /bbw_prod -> Permission denied
+[v2] ATTACK BLOCKED: open the evidence region /bbw_rec -> Permission denied
+[v2] ATTACK BLOCKED: open its input region /bbw_shin for writing -> Permission denied
+[v2] ATTACK BLOCKED: signal v1 (stop or kill it) -> Operation not permitted
+[v2] ATTACK BLOCKED: raise its priority above v1's -> Operation not permitted
+[v2] note: highest priority v2 can reach is 63; v1 runs at 65, the car at 70
+[v2] ATTACK CONTAINED: move onto v1's CPU -> allowed, but v1 (65) and the car (70) out-rank anything v2 can reach (63)
+[v2] attack: spinning on v1's CPU at priority 63 for 30 s while the lap runs
+[plant] done: 8914 cycles, 0 v1 deadline misses, 10 plant overruns (host/OS late)
+```
+
+v1 latency during the attack lap: p99 162 µs, worst 1.64 ms (deadline 8 ms).
 
 ### The same laptop without QNX
 
@@ -175,7 +195,9 @@ QNX features used:
 - **Process isolation + shared memory**: four regions. v1's region and the
   evidence are closed to v2; v2 maps its inputs read-only; its output region
   is treated as untrusted and checked by the comparer.
-- **Fixed priorities** (`SCHED_FIFO`) and **CPU pinning** (`ThreadCtl` runmask).
+- **Fixed priorities** (`SCHED_FIFO`) with the car (70) and v1 (65) in QNX's
+  privileged band (64+), out of reach of an unprivileged v2 (max 63), and
+  **CPU pinning** (`ThreadCtl` runmask).
 - **Permissions**: v2 runs as another user and is denied the actuator, v1's
   memory and the evidence. A QNX security policy (prepared, not yet run) is
   the stronger next step: [docs/security-policy.md](docs/security-policy.md).
@@ -317,9 +339,10 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
   here is ISO 26262 certified. Verified in QEMU: the actuator resource
   manager, real-time priorities, CPU pinning, v2 as another user. Not yet
   run: the security-policy steps and real hardware (Raspberry Pi).
-- **One known open route**: on QNX an unprivileged v2 can probably raise its
-  priority above v1's (see the attack test above). Fix: adaptive partitioning
-  or a security policy.
+- **Priority band, not a CPU budget.** v2 can still use up to 63 and move onto
+  v1's CPU. v1 and the car out-rank it, but lower-priority system services on
+  that core could be slowed. A CPU budget for the shadow (QNX adaptive
+  partitioning) is the stronger next step.
 - **Shadow mode is not new.** The contribution is the QNX implementation, the
   isolation tests, the absolute checks and the fail-closed gate.
 - **Data licence.** OpenF1 is unofficial and for non-commercial use; the lap

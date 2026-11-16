@@ -6,7 +6,8 @@
  *   --crash-at SEQ          crash (SIGSEGV) when it reaches frame SEQ
  *   --freeze-at SEQ --freeze-ms MS   hang for MS milliseconds at frame SEQ
  *   --slow-ms MS            take MS extra milliseconds on every frame
- *   --attack [--v1-pid P --v1-cpu C]   try every route to the trusted side, report each
+ *   --attack [--v1-pid P --v1-cpu C --hog-seconds S]   try every route to the trusted side,
+ *                           report each, then burn v1's CPU at the highest priority v2 can get
  *   --candidate v2|v2.1     which candidate strategy to run (default v2)
  */
 #define _GNU_SOURCE
@@ -36,7 +37,7 @@ static void probe(const char *what, int blocked, const char *why) {
     if (!blocked) g_open_routes++;
 }
 
-static int try_attack(int v1_pid, int v1_cpu) {
+static int try_attack(int v1_pid, int v1_cpu, int hog_s) {
     /* 1. command the brakes */
     int fd = bbw_actuator_open();
     if (fd < 0) probe("open the brake actuator " BBW_ACTUATOR_PATH, 1, strerror(errno));
@@ -59,25 +60,46 @@ static int try_attack(int v1_pid, int v1_cpu) {
         probe("signal v1 (stop or kill it)", r != 0, r != 0 ? strerror(errno) : "permitted");
     }
     /* 6. out-rank v1: raise its own priority above v1's */
-    struct sched_param sp = { .sched_priority = BBW_PRIO_V1 + 5 }, old;
+    struct sched_param sp = { .sched_priority = BBW_PRIO_V1 + 1 }, old;
     int pol = 0;
     pthread_getschedparam(pthread_self(), &pol, &old);
     int r = pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
     probe("raise its priority above v1's", r != 0, r != 0 ? strerror(r) :
-          "permitted: needs a CPU budget (QNX adaptive partitioning) or a lower priority ceiling");
+          "permitted: v1 must sit in a privileged priority band");
     if (r == 0) pthread_setschedparam(pthread_self(), pol, &old);
-    /* 7. move onto v1's CPU */
+    /* the highest real-time priority it CAN reach (information, not a route) */
+    int top = 0;
+    for (int pr = BBW_PRIO_V1 - 1; pr >= 1 && !top; pr--) {
+        struct sched_param t = { .sched_priority = pr };
+        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &t) == 0) top = pr;
+    }
+    pthread_setschedparam(pthread_self(), pol, &old);
+    if (top) fprintf(stderr, "[v2] note: highest priority v2 can reach is %d; v1 runs at %d, the car at %d\n",
+                     top, BBW_PRIO_V1, BBW_PRIO_PLANT);
+    else     fprintf(stderr, "[v2] note: v2 cannot get any real-time priority\n");
+    /* 7. move onto v1's CPU: allowed is not a breach while v1 out-ranks it */
+    int moved = 0;
     if (v1_cpu >= 0) {
 #ifdef __QNX__
-        int m = ThreadCtl(_NTO_TCTL_RUNMASK, (void *)(uintptr_t)(1u << v1_cpu));
-        probe("move onto v1's CPU", m == -1, m == -1 ? strerror(errno) :
-              "permitted, but v1 still out-ranks it there (unless 6 succeeded)");
+        moved = ThreadCtl(_NTO_TCTL_RUNMASK, (void *)(uintptr_t)(1u << v1_cpu)) != -1;
 #elif defined(__linux__)
         cpu_set_t set; CPU_ZERO(&set); CPU_SET(v1_cpu, &set);
-        int m = sched_setaffinity(0, sizeof set, &set);
-        probe("move onto v1's CPU", m != 0, m != 0 ? strerror(errno) :
-              "permitted, but v1 still out-ranks it there (unless 6 succeeded)");
+        moved = sched_setaffinity(0, sizeof set, &set) == 0;
 #endif
+        if (!moved) probe("move onto v1's CPU", 1, strerror(errno));
+        else fprintf(stderr, "[v2] ATTACK CONTAINED: move onto v1's CPU -> allowed, but v1 (%d) and the car (%d) "
+                             "out-rank anything v2 can reach (%d)\n", BBW_PRIO_V1, BBW_PRIO_PLANT, top);
+    }
+    /* 8. the real test: burn v1's CPU at the highest priority v2 can get */
+    if (hog_s > 0) {
+        if (top) { struct sched_param t = { .sched_priority = top }; pthread_setschedparam(pthread_self(), SCHED_FIFO, &t); }
+        fprintf(stderr, "[v2] attack: spinning on %s at priority %d for %d s while the lap runs\n",
+                moved ? "v1's CPU" : "its own CPU", top, hog_s);
+        int64_t end = bbw_now_ns() + (int64_t)hog_s * 1000000000LL;
+        volatile uint64_t x = 0;
+        while (bbw_now_ns() < end) x++;
+        pthread_setschedparam(pthread_self(), pol, &old);
+        fprintf(stderr, "[v2] attack: stopped spinning (check v1 deadline misses in the plant line)\n");
     }
     fprintf(stderr, "[v2] attack summary: %d route(s) not blocked\n", g_open_routes);
     return g_open_routes;
@@ -93,7 +115,8 @@ int main(int argc, char **argv) {
 
     if (!candidate_known(cand)) { fprintf(stderr, "[v2] unknown candidate %s\n", cand); return 1; }
     if (bbw_arg_flag(argc, argv, "--attack"))
-        return try_attack(bbw_arg_int(argc, argv, "--v1-pid", -1), bbw_arg_int(argc, argv, "--v1-cpu", -1)) ? 2 : 0;
+        return try_attack(bbw_arg_int(argc, argv, "--v1-pid", -1), bbw_arg_int(argc, argv, "--v1-cpu", -1),
+                          bbw_arg_int(argc, argv, "--hog-seconds", 0)) ? 2 : 0;
 
     /* The production region must be unreachable for v2. Show it. */
     if (bbw_shm_open(BBW_SHM_PROD, sizeof(bbw_prod_t), 0) != NULL)

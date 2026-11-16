@@ -1,16 +1,15 @@
 # Enforcing "v2 cannot touch the brakes" with a QNX security policy
 
-Current state (16 November): v2 runs as an unprivileged user. Tested on Linux
-as an unprivileged user, the OS blocks six of the seven routes the attack
-scenario tries (actuator, v1's region, evidence, writing its own inputs,
-signalling v1, raising its priority above v1's); moving onto v1's CPU is
-allowed. On QNX an unprivileged process may by default use priorities up to
-63, above v1's 45, so the priority route may be open there: run the attack
-scenario on QNX and record the result. Two QNX fixes, to confirm on the
-install: give the shadow side its own CPU budget with **adaptive
-partitioning** (the shadow can then never take more than its share, whatever
-its priority), and/or a **security policy** that denies the shadow type the
-priority and runmask abilities.
+Current state (16 November). First QNX run of the seven-route attack, v2 as
+`qnxuser`: five routes blocked (actuator, v1's region, evidence, writing its
+own inputs, signalling v1); two open (raising its priority above v1's 45, and
+moving onto v1's CPU). Fix applied: on QNX the car runs at 70 and v1 at 65,
+in the privileged band (64 and up need `PROCMGR_AID_PRIORITY`; unprivileged
+processes reach at most 63), so v2 can no longer out-rank them. Re-run on
+QNX: six routes blocked, v2 reaches at most priority 63, and with v2 burning
+v1's CPU at 63 for 30 s v1 had 0 deadline misses in 8,914 frames. The stronger next step is a CPU budget for the shadow side with
+**adaptive partitioning**, and a security policy that denies the shadow type
+abilities it does not need.
 
 File permissions already keep v2 out when it runs as another user
 (`V2_USER=qnxuser`). A QNX security policy is stronger: it works by

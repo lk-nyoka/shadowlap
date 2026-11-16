@@ -12,7 +12,8 @@
 #   flood     v2 plus CPU-burning threads at shadow priority
 #   attack    a hostile v2 tries every route to the trusted side: the brakes,
 #             v1's memory, the evidence, its own inputs, signalling v1,
-#             out-ranking v1, moving onto v1's CPU (each reported separately)
+#             out-ranking v1, moving onto v1's CPU (each reported separately),
+#             then burns v1's CPU for 30 s at the highest priority it can get
 #   all       every scenario above, one after another
 #   stop      end a run that is in progress (kills the programs it started)
 #
@@ -125,7 +126,7 @@ run_one() {
             ;;
         attack)
             sleep 2
-            ( as_v2 "$BIN/bbw_v2" --attack --v1-pid "$V1" ${PROD_CPU:+--v1-cpu $PROD_CPU} ) > "$out/v2.log" 2>&1     # subshell: as_v2 uses exec
+            ( as_v2 "$BIN/bbw_v2" --attack --v1-pid "$V1" ${PROD_CPU:+--v1-cpu $PROD_CPU} --hog-seconds 30 ) > "$out/v2.log" 2>&1     # subshell: as_v2 uses exec
             echo "attack exit code: $?" >> "$out/v2.log"
             ;;
         *) echo "unknown scenario $s"; cleanup; return 1 ;;
@@ -138,7 +139,7 @@ run_one() {
     cat "$out/plant.log" "$out/comparer.log" | grep -E "done|not valid|ERROR" | sed 's/^/    /'
     # if started with sudo, give the results back to the normal user
     [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUTROOT" 2>/dev/null
-    cat "$out"/v2.log "$out"/events.log 2>/dev/null | grep -E "ATTACK|injected|SIG" | sed "s/^/    /"
+    cat "$out"/v2.log "$out"/events.log 2>/dev/null | grep -E "ATTACK|attack:|note:|injected|SIG" | sed "s/^/    /"
     return 0
 }
 

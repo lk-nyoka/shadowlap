@@ -38,9 +38,19 @@
 #define BBW_ACTUATOR_PATH "/tmp/bbw_actuator"   /* Linux stand-in: a FIFO */
 #endif
 
-/* ---------- priorities (SCHED_FIFO) ---------- */
+/* ---------- priorities (SCHED_FIFO) ----------
+ * On QNX, priorities 64-255 are privileged (PROCMGR_AID_PRIORITY): an
+ * unprivileged process can reach at most 63. The car and v1 sit above that
+ * line, so a hostile v2 running as another user can never out-rank them,
+ * whatever it does to its own priority or CPU. (Linux: unprivileged users
+ * get no real-time priority at all by default, RLIMIT_RTPRIO = 0.) */
+#ifdef __QNX__
+#define BBW_PRIO_PLANT     70
+#define BBW_PRIO_V1        65
+#else
 #define BBW_PRIO_PLANT     50
 #define BBW_PRIO_V1        45
+#endif
 #define BBW_PRIO_COMPARER  20
 #define BBW_PRIO_V2        10
 #define BBW_PRIO_HOG       10

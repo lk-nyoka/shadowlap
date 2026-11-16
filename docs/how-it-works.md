@@ -132,9 +132,9 @@ Layers, from weakest to strongest:
 The `attack` scenario tests seven routes and reports each one: open the
 actuator, open v1's region, open the evidence, write its own inputs, signal
 v1, raise its priority above v1's, move onto v1's CPU. As an unprivileged
-user on Linux the first six are blocked. Moving CPUs is allowed (v1 still
-out-ranks it there). On QNX, raising the priority may be allowed by default,
-which is why a CPU budget for the shadow is on the list.
+user the first six are blocked. Moving CPUs is allowed but contained: v1 and
+the car out-rank anything v2 can reach. The attack then burns v1's CPU for
+30 s at v2's highest priority, and v1's deadline misses are counted.
 
 ## What the disagreement labels mean
 
@@ -165,7 +165,11 @@ frame and count as an episode once they last 50 ms.
   `write()` from v1 is a QNX message, and the plant thread that handles it
   inherits v1's priority. On Linux the same code uses a FIFO, and the flood
   test caught a bug there that QNX's priority inheritance hides (see below).
-- **Fixed priorities** (`SCHED_FIFO`): plant 50, v1 45, comparer 20, v2 10.
+- **Fixed priorities** (`SCHED_FIFO`): on QNX plant 70, v1 65 (the privileged
+  band: an unprivileged process can reach at most 63), comparer 20, v2 10. On
+  Linux plant 50, v1 45 (unprivileged users get no real-time priority there).
+  The first QNX attack test found v1 at 45 within v2's reach; moving it to 65
+  closed that route.
 - **CPU pinning** (`ThreadCtl` runmask): production on one core, shadow on
   another. A runmask belongs to one thread, so every safety-relevant thread
   (including the plant's actuator thread) sets and verifies its own.
