@@ -1,0 +1,137 @@
+# How it works, in plain words
+
+## The problem
+
+A racing team (or any EV maker) has a brake controller that works. Engineers
+write a better one. How do you find out whether the new one is actually
+better without letting it brake a real car?
+
+Shadow mode: the new controller runs alongside the trusted one, sees exactly
+the same inputs, makes its own decisions, and those decisions go nowhere
+except into a log. Afterwards you compare.
+
+## What is being controlled
+
+When the driver brakes, the rear of the car slows in two ways at once:
+
+- **the motor** running backwards, which recharges the battery (harvesting)
+- **the brake discs**, which turn the energy into heat
+
+Every 10 ms a controller decides the split. Harvest too little and you waste
+energy. Harvest too much and you overcharge the battery, break the lap's
+energy limit, or ask the rear tyres for more grip than they have.
+
+- **v1** is the trusted controller. It is in charge.
+- **v2** is the candidate. It tries to harvest more: it moves 12% more braking
+  to the rear, charges at full power until the battery is 90% full (v1 eases
+  off from 80%), and it has a deliberate bug: it forgets the lap energy limit.
+
+## The five programs
+
+| Program | Job | Can it brake the car? |
+|---|---|---|
+| `bbw_plant` | The simulated car. Replays the lap, owns the clock, owns the brake actuator, tracks the battery. | It *is* the car |
+| `bbw_v1` | Trusted controller. Reads each frame, sends its decision to the actuator. | Yes, the only one |
+| `bbw_v2` | Shadow controller. Reads copies of the frames, sends decisions to the comparer. | No |
+| `bbw_comparer` | Lines up v1's and v2's decisions per frame and labels every disagreement. | No |
+| `bbw_hog` | Burns CPU, to show a greedy shadow side cannot starve v1. | No |
+
+## One cycle (10 ms)
+
+1. The plant builds a **frame**: speed, how hard the driver is braking,
+   battery charge, energy harvested so far this lap, rear grip limit.
+2. It gives the frame to v1 and **pins a copy on the noticeboard** for v2.
+3. v1 decides and writes its command to the actuator.
+4. 8 ms after handing v1 the frame, the plant takes v1's command. If none
+   arrived, that is a **deadline miss** and the discs do all the braking
+   (safe fallback). If the plant itself woke up more than 2 ms late (the host
+   OS stalled it), that cycle is also counted as a **plant overrun / host
+   stall**, so v1 is never blamed for time it did not get.
+5. The plant enforces physics anyway (it clamps anything impossible), updates
+   the battery and writes a record for the comparer.
+
+Meanwhile v2 reads the noticeboard whenever it gets CPU time and posts its own
+decision for the comparer.
+
+## Why v1 never waits for v2
+
+The noticeboard is a fixed-size ring in shared memory. The plant drops each
+frame into it and moves on. If v2 is slow, frozen or dead, the ring fills, new
+frames are dropped and counted, and the plant still never waits. v1 does not
+even know v2 exists. It only opens the production region and the actuator.
+
+**Example: v2 freezes for 2 s as the car brakes for the first chicane.**
+v1 keeps answering every 10 ms and the car brakes normally. The comparer sees
+no answers from v2 for those frames. The comparer waits up to 1 s for each
+answer; anything later is marked `shadow_missing` (about 100 frames in the
+test run). The report shows that as a gap. It never counts a gap as agreement.
+When v2 wakes up it works through the backlog it still has.
+
+## Keeping v2 away from the brakes
+
+Three layers, from weakest to strongest:
+
+1. **By design**: v2's code never opens the actuator.
+2. **By file permissions** (QNX and Linux): the production region and the
+   actuator belong to root and are closed to other users. Run v2 as
+   `qnxuser` and it cannot open them (`V2_USER=qnxuser`).
+3. **By QNX security policy**: v2 runs with its own security type, and the
+   policy gives that type no right to reach the actuator. See
+   [security-policy.md](security-policy.md).
+
+The `attack` scenario tests this: v2 tries to write a huge braking command to
+the actuator and reports whether it got through.
+
+## What the disagreement labels mean
+
+| Label | Meaning |
+|---|---|
+| `agree` | Same decision (within 50 N) |
+| `within_limits` | Different, but physically allowed |
+| `over_battery` | v2 wanted to charge harder than the battery accepts |
+| `over_lap_cap` | v2 kept harvesting after the lap's energy limit was used |
+| `rear_lock_risk` | v2 asked the rear tyres for more braking than they can grip |
+| `shadow_missing` | v2 did not answer this frame |
+
+## Where QNX matters
+
+- **Separate processes with memory protection**: v2 crashing cannot corrupt v1.
+- **The actuator is a QNX resource manager** (`/dev/bbw/actuator`). Every
+  `write()` from v1 is a QNX message, and the plant thread that handles it
+  inherits v1's priority. On Linux the same code uses a FIFO, and the flood
+  test caught a bug there that QNX's priority inheritance hides (see below).
+- **Fixed priorities** (`SCHED_FIFO`): plant 50, v1 45, comparer 20, v2 10.
+- **CPU pinning** (`ThreadCtl` runmask): production on one core, shadow on another.
+- **Security policies**: OS-enforced "v2 cannot touch the brakes".
+
+### A finding from testing
+
+On the first Linux flood run, v1 missed 3,599 of 9,016 deadlines. Cause: the
+plant's actuator thread had been started before the plant raised its own
+priority, so it ran at normal priority and the shadow-side CPU burners starved
+it. Fixed by setting priority first. On QNX, the resource manager thread would
+have inherited v1's priority from v1's message anyway.
+
+A second Linux-only effect: Linux pauses *all* real-time threads once
+real-time work uses 95% of a second (`sched_rt_runtime_us`). With burners at
+real-time priority, that pause hit v1 too (43 misses in 30 s). QNX has strict
+priority preemption, so this is a test to run on QNX with `HOG_PRIO=10`.
+
+### What Windows showed
+
+On a Windows 11 laptop (Ubuntu in WSL), one lap with nothing misbehaving gave
+40 v1 deadline misses and 82 host stalls, even with real-time priority. The
+misses came in bursts at the same moments as the stalls: Windows was pausing
+the whole Ubuntu virtual machine, v1 included. Real-time priority inside a
+virtual machine cannot prevent that. A real-time OS on real hardware can.
+
+## What this is not
+
+- Not real F1 data inside the car. The lap gives speed, throttle and a brake
+  on/off flag. Battery, motor and forces come from a small model in
+  `include/control.h`. Every "kW" and "MJ" in the report is a model output.
+- Not closed-loop. v2 always sees a battery shaped by v1's choices. The report
+  shows what v2 *would have asked for* in v1's world.
+- Not code that runs on an F1 car. F1 uses a standard control unit. This is a
+  development and test-rig tool, and the same idea applies to any EV or hybrid
+  that blends motor and disc braking.

@@ -1,0 +1,3 @@
+[v2] note: production region is readable by v2 on this system (on QNX, run v2 as a separate user to deny this)
+[v2] shadowing (pid 9969)
+[v2] done: 9016 frames shadowed
