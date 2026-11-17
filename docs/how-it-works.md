@@ -129,7 +129,9 @@ Layers, from weakest to strongest:
    security type, and the policy gives that type no rights it does not need.
    See [security-policy.md](security-policy.md).
 
-The `attack` scenario tests seven routes and reports each one: open the
+The `attack` scenario tests ten routes and reports each one (the last three,
+added later: start a child process, exhaust memory, exhaust open files; all
+blocked by limits `bbw_runas` sets). The first seven: open the
 actuator, open v1's region, open the evidence, write its own inputs, signal
 v1, raise its priority above v1's, move onto v1's CPU. As an unprivileged
 user the first six are blocked. Moving CPUs is allowed but contained: v1 and

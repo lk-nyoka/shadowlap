@@ -52,7 +52,7 @@ int main(int argc, char **argv) {
     fprintf(csv, "seq,t_lap,dist_m,zone,v_kmh,brake,a_req,soc,lap_harvest_mj,f_rear_req,f_rear_grip,"
                  "v1_regen,v1_friction,v1_applied,v1_clamped,v1_latency_us,p_regen_kw,"
                  "v2_present,v2_regen,v2_friction,delta_regen,class,shadow_dropped,plant_lag_us,motor_temp_c,wing_closed,"
-                 "v2_extra_kmh\n");
+                 "v2_extra_kmh,v1_class\n");
 
     slot_t *tab = calloc(TAB_N, sizeof *tab);
     bbw_record_t *pend = malloc(TAB_N * sizeof *pend);
@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
                 lat[lat_n++] = p->latency_ns;
             }
             fprintf(csv, "%llu,%.3f,%.1f,%d,%.2f,%d,%.3f,%.4f,%.4f,%.1f,%.1f,"
-                         "%.1f,%.1f,%d,%d,%.1f,%.2f,%d,%.1f,%.1f,%.1f,%s,%llu,%.1f,%.1f,%.2f,%.2f\n",
+                         "%.1f,%.1f,%d,%d,%.1f,%.2f,%d,%.1f,%.1f,%.1f,%s,%llu,%.1f,%.1f,%.2f,%.2f,%s\n",
                     (unsigned long long)p->f.seq, p->f.t_lap, p->f.dist_m, p->f.zone, p->f.v * 3.6,
                     p->f.brake, p->f.a_req, p->f.soc, p->f.lap_harvest_j / 1e6,
                     p->f.f_rear_req, p->f.f_rear_grip,
@@ -126,7 +126,7 @@ int main(int argc, char **argv) {
                     present, present ? s->c.f_regen : 0.0, present ? s->c.f_friction : 0.0,
                     present ? s->c.f_regen - p->cmd.f_regen : 0.0, dis_name(cls),
                     (unsigned long long)missing, (double)p->plant_lag_ns / 1000.0,
-                    p->f.motor_temp_c, p->f.wing_closed, sh_v2.dv * 3.6);
+                    p->f.motor_temp_c, p->f.wing_closed, sh_v2.dv * 3.6, dis_name(h1));
             s->have = 0;
             pt++;
             rows++;

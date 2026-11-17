@@ -41,7 +41,7 @@ import lapgen  # noqa: E402
 FIELDS = ["seq", "t_lap", "zone", "v_kmh", "soc", "lap_harvest_mj", "v1_regen", "v1_applied",
           "v1_latency_us", "v2_present", "v2_regen", "class", "f_rear_grip", "plant_lag_us",
           "v1_friction", "v2_friction", "f_rear_req", "a_req", "brake", "motor_temp_c", "wing_closed",
-          "v2_extra_kmh"]
+          "v2_extra_kmh", "v1_class"]
 SCENARIOS = ["shadow", "crash", "freeze", "sigstop", "flood", "attack", "baseline"]
 CANDIDATES = ["v2", "v2.1", "v3"]
 # Track conditions for a live lap. Fixed list, so nothing typed in the browser reaches a shell.
@@ -405,122 +405,180 @@ class Handler(BaseHTTPRequestHandler):
 PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Shadow Lap - live</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-:root{--bg:#0b0b0c;--panel:#141416;--line:#26262a;--txt:#ececea;--mut:#8b8b90;--v1:#3ecf8e;--v2:#ff6b3d;--warn:#f5b13d;--bad:#ff4d4d;--cap:#9b8cff}
+:root{--bg:#090c11;--panel:#10151c;--panel2:#0c1016;--line:#1d2530;--txt:#e8edf3;--mut:#8592a3;--v1:#3ecf8e;--v2:#ff8a3d;--warn:#f5b13d;--bad:#ff5a5a;--cap:#9b8cff;--blue:#5aa9ff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 Inter,system-ui,-apple-system,Segoe UI,sans-serif}
-header{display:flex;align-items:center;gap:14px;padding:18px 28px 6px;flex-wrap:wrap}
-h1{font-size:20px;font-weight:600;letter-spacing:-.01em;margin:0}
-.scn{font:12px ui-monospace,Menlo,monospace;color:var(--mut);border:1px solid var(--line);padding:3px 10px;border-radius:99px}
-.live{width:8px;height:8px;border-radius:50%;background:var(--mut);display:inline-block;margin-right:6px}
-.live.on{background:var(--v1);animation:p 1.2s infinite}@keyframes p{50%{opacity:.25}}
-.ctl{display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap}
-select,input{background:#0b0b0c;border:1px solid var(--line);color:var(--txt);border-radius:6px;padding:6px 8px;font-size:12px}
-button{background:var(--txt);color:#0b0b0c;border:0;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer}
-button.ghost{background:transparent;color:var(--txt);border:1px solid var(--line)}button:disabled{opacity:.4;cursor:default}
-button.brake{background:var(--bad);color:#fff}button.brake.held{background:#fff;color:var(--bad)}
-.stats{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line);margin:12px 28px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.stat{background:var(--panel);padding:14px 16px}.stat b{display:block;font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-.stat span{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
-.ok{color:var(--v1)}.bad{color:var(--bad)}.warn{color:var(--warn)}
-.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px;padding:8px 28px 28px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-.card h2{font-size:12px;font-weight:500;color:var(--mut);margin:0 0 8px;text-transform:uppercase;letter-spacing:.06em}
+header{display:flex;align-items:center;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line)}
+.logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#1c2735,#0e141c);border:1px solid var(--line);display:grid;place-items:center}
+h1{font-size:19px;font-weight:650;letter-spacing:-.01em;margin:0}.sub{font-size:12px;color:var(--mut)}
+.scn{margin-left:auto;font:12px ui-monospace,Menlo,monospace;color:var(--mut);border:1px solid var(--line);padding:5px 12px;border-radius:99px;background:var(--panel2)}
+.live{width:8px;height:8px;border-radius:50%;background:var(--mut);display:inline-block;margin-right:8px}
+.live.on{background:var(--v1);box-shadow:0 0 8px var(--v1);animation:p 1.2s infinite}@keyframes p{50%{opacity:.35}}
+select,input{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:8px 10px;font-size:13px;width:100%}
+label.f{display:block;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;margin:10px 0 4px}
+button{background:var(--txt);color:#090c11;border:0;border-radius:8px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer}
+button.go{background:#2bb673;color:#04140c;width:100%;margin-top:14px;padding:11px}button.ghost{background:transparent;color:var(--txt);border:1px solid var(--line)}
+button:disabled{opacity:.4;cursor:default}button.brake{background:var(--bad);color:#fff}button.brake.held{background:#fff;color:var(--bad)}
+.wrap{display:grid;grid-template-columns:270px minmax(0,1.15fr) minmax(0,1fr);gap:14px;padding:14px 24px}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.card h2{font-size:12px;font-weight:600;color:var(--mut);margin:0 0 10px;text-transform:uppercase;letter-spacing:.07em}
+.q{font-size:11px;color:var(--blue);text-transform:uppercase;letter-spacing:.08em;margin:2px 0 -6px 2px;font-weight:600}
 canvas{width:100%;display:block}
-.legend{display:flex;gap:14px;font-size:12px;color:var(--mut);margin-top:6px;flex-wrap:wrap}.legend i{display:inline-block;width:10px;height:3px;margin-right:6px;vertical-align:middle}
-#log{list-style:none;margin:0;padding:0;max-height:330px;overflow:auto;font-size:13px}
-#log li{padding:10px 0;border-bottom:1px solid var(--line)}#log li em{font-style:normal;font:11px ui-monospace,Menlo,monospace;color:var(--mut);display:block}
-.tag{font-size:10px;padding:2px 7px;border-radius:99px;margin-right:6px;color:#0b0b0c;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
-.vwrap{position:relative}.vid{aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+.tile span{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.07em;display:block}
+.tile b{font-size:21px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.tiles3{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.tiles3 .tile{background:var(--panel2);padding:10px}.tiles3 .tile b{font-size:18px}
+.ok{color:var(--v1)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.legend{display:flex;gap:12px;font-size:11px;color:var(--mut);margin-top:6px;flex-wrap:wrap}.legend i{display:inline-block;width:10px;height:3px;margin-right:6px;vertical-align:middle}
+.verdict{border-radius:12px;padding:14px;text-align:center;border:1px solid var(--line);background:var(--panel2)}
+.verdict>b{display:block;font-size:20px;letter-spacing:.02em;margin:2px 0}.verdict p b{color:var(--txt)}.verdict p{margin:4px 0 0;font-size:12px;color:var(--mut)}
+.verdict.fail{border-color:rgba(255,90,90,.6);background:rgba(255,90,90,.07)}.verdict.fail b{color:var(--bad)}
+.verdict.clean{border-color:rgba(62,207,142,.5);background:rgba(62,207,142,.06)}.verdict.clean b{color:var(--v1)}
+table.chk{width:100%;border-collapse:collapse;font-size:13px}table.chk th{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;text-align:left;font-weight:600;padding:4px 6px;border-bottom:1px solid var(--line)}
+table.chk td{padding:7px 6px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}table.chk td.k{color:var(--mut);font-size:11px}
+.pill{font-size:11px;padding:2px 8px;border-radius:99px;font-weight:600}.pill.ok{background:rgba(62,207,142,.12)}.pill.bad{background:rgba(255,90,90,.14)}.pill.warn{background:rgba(245,177,61,.14)}.pill.mut{color:var(--mut);background:#151b23}
+#log{list-style:none;margin:0;padding:0;max-height:300px;overflow:auto;font-size:13px}
+#log li{padding:9px 0;border-bottom:1px solid var(--line)}#log li em{font-style:normal;font:11px ui-monospace,Menlo,monospace;color:var(--mut);display:block}
+.tag{font-size:10px;padding:2px 7px;border-radius:99px;margin-right:6px;color:#090c11;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.lower{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:0 24px 14px}
+.lower2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;padding:0 24px 14px}
+.vwrap{position:relative}.vid{aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px}
 .vid iframe,.vid video{width:100%;height:100%;border:0}
-.over{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55);border-radius:8px;font-size:15px;font-weight:600}
-.vrow{display:flex;gap:6px;margin-top:8px;align-items:center;flex-wrap:wrap}.vrow input#yt{flex:1;min-width:0}.vrow input#off{width:70px}
-.vrow label{font-size:12px;color:var(--mut);cursor:pointer}
+.over{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55);border-radius:10px;font-size:15px;font-weight:600}
+.vrow{display:flex;gap:6px;margin-top:8px;align-items:center;flex-wrap:wrap}.vrow input#yt{flex:1;min-width:0;width:auto}.vrow input#off{width:70px}.vrow input[type=checkbox]{width:auto}
+.vrow label{font-size:12px;color:var(--mut);cursor:pointer}.vrow input[type=file]{width:auto}
 .mono{font:11px ui-monospace,Menlo,monospace;color:var(--mut);margin-top:6px}
 #calib{display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
-.foot{color:var(--mut);font-size:12px;padding:0 28px 24px}
-.top{display:grid;grid-template-columns:1.25fr 1fr;gap:16px;padding:0 28px 8px}
-.story{font-size:15px;line-height:1.5;min-height:46px;margin:2px 0 12px}
-.split{display:grid;grid-template-columns:150px 1fr 110px;gap:10px;align-items:center;margin:8px 0}
-.split .lbl{font-size:12px;color:var(--mut)}.split .lbl b{color:var(--txt)}.split .val{font:12px ui-monospace,Menlo,monospace;text-align:right}
-.bar{position:relative;height:22px;background:#0b0b0c;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.foot{color:var(--mut);font-size:12px;padding:4px 24px 24px}
+.story{font-size:14px;line-height:1.5;min-height:44px;margin:0 0 10px}
+.split{display:grid;grid-template-columns:120px 1fr 122px;gap:10px;align-items:center;margin:7px 0}
+.split .lbl{font-size:12px;color:var(--mut)}.split .lbl b{color:var(--txt)}.split .val{font:11px ui-monospace,Menlo,monospace;text-align:right;white-space:nowrap}
+.bar{position:relative;height:20px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .bar i{position:absolute;top:0;bottom:0}.bar .lim{width:2px;background:#fff;opacity:.9}.bar.risk{border-color:var(--bad);box-shadow:0 0 0 1px var(--bad)}
-.mini{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-top:10px}.mini b{color:var(--txt);font-weight:600}
+.mini{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-top:8px}.mini b{color:var(--txt);font-weight:600}
+@media (max-width:1150px){.wrap{grid-template-columns:1fr}.lower,.lower2{grid-template-columns:1fr}.tiles{grid-template-columns:repeat(2,1fr)}}
 </style></head><body>
-<header><h1>Shadow Lap</h1><span class="scn" id="scn"><span class="live" id="dot"></span><span id="scnt">waiting for a run</span></span>
- <div class="ctl">
-  <select id="lap" title="lap"></select>
-  <select id="target" title="where to run"><option value="local">This PC</option><option value="qnx">QNX</option></select>
-  <select id="scen" title="scenario"></select>
-  <select id="cond" title="track conditions"><option value="normal">Normal day</option><option value="worn">Worn tyres (90% grip)</option><option value="hot">Hot day (42 °C)</option><option value="tough">Hot day + worn tyres</option></select>
-  <select id="cand" title="candidate brake software"><option value="v2">candidate v2</option><option value="v2.1">candidate v2.1 (fixed)</option><option value="v3">candidate v3 (blending)</option></select>
-  <button id="start">Start lap</button><button id="stop" class="ghost" disabled>Stop</button>
- </div></header>
-<div class="stats">
- <div class="stat"><span>Lap time</span><b id="s_t">-</b></div>
- <div class="stat"><span>Speed km/h</span><b id="s_v">-</b></div>
- <div class="stat"><span>Battery</span><b id="s_soc">-</b></div>
- <div class="stat"><span>v1 deadline misses</span><b id="s_miss" class="ok">0</b></div>
- <div class="stat"><span>Host stalls</span><b id="s_ovr" class="ok">0</b></div>
- <div class="stat"><span>v1 latency now</span><b id="s_lat">-</b></div>
- <div class="stat"><span>v2 status</span><b id="s_v2">-</b></div>
-</div>
-<div class="top">
- <div class="card"><h2 id="maph">The car on track</h2><canvas id="map" height="300"></canvas>
-  <div class="legend"><span><i style="background:#ececea"></i>track</span><span><i style="background:#ff6b3d"></i>braking zones</span><span><i style="background:#3ecf8e;height:8px;width:8px;border-radius:50%"></i>the car now</span><span>dots on the track: where the candidate broke a limit</span></div>
-  <div class="legend" style="margin-top:4px"><span>Lap data: OpenF1 (independent, CC BY-NC-SA 4.0, non-commercial). Speeds and positions are real; forces, battery and motor are modelled; extra speed is an estimate.</span></div></div>
- <div class="card"><h2>Rear brakes right now</h2>
-  <div id="story" class="story">Press Start lap, or play a video, to begin.</div>
-  <div class="split"><div class="lbl">Driver asks the rear for</div><div class="val" id="b_req">-</div></div>
-  <div class="split"><div class="lbl"><b>v1</b> in charge (really brakes the car)</div><div class="bar" id="bar1"></div><div class="val" id="b_v1">-</div></div>
-  <div class="split"><div class="lbl"><b>v2</b> in shadow (only proposes)</div><div class="bar" id="bar2"></div><div class="val" id="b_v2">-</div></div>
-  <div class="legend"><span><i style="background:var(--v1)"></i>motor braking (charges the battery)</span><span><i style="background:#6b6b70"></i>brake discs (heat)</span><span><i style="background:#fff;width:2px;height:12px"></i>tyre grip limit</span></div>
-  <div class="mini"><span>Battery <b id="m_soc">-</b></span><span>Motor <b id="m_mot">-</b></span><span>Wings <b id="m_wing">-</b></span><span>Braking <b id="m_g">-</b></span></div>
+<header><div class="logo"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M2 13c3-8 9-8 14-6" stroke="#5aa9ff" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M2 15c3-6 8-6 12-4" stroke="#ff8a3d" stroke-width="1.6" fill="none" stroke-dasharray="2 2" stroke-linecap="round"/></svg></div>
+ <div><h1>Shadow Lap</h1><div class="sub">Test the next brake controller without putting it in control</div></div>
+ <span class="scn" id="scn"><span class="live" id="dot"></span><span id="scnt">waiting for a run</span></span></header>
+<div class="wrap">
+ <div class="col">
+  <div class="card"><h2>Test configuration</h2>
+   <label class="f">Lap</label><select id="lap"></select>
+   <label class="f">Run on</label><select id="target"><option value="local">This PC</option><option value="qnx">QNX</option></select>
+   <label class="f">Scenario</label><select id="scen"></select>
+   <label class="f">Conditions</label><select id="cond"><option value="normal">Normal day</option><option value="worn">Worn tyres (90% grip)</option><option value="hot">Hot day (42 °C)</option><option value="tough">Hot day + worn tyres</option></select>
+   <label class="f">Candidate</label><select id="cand"><option value="v2">v2 (more rear braking, more harvest)</option><option value="v2.1">v2.1 (v2 with its flaws fixed)</option><option value="v3">v3 (smoother blending)</option></select>
+   <button id="start" class="go">▶ Start lap</button><button id="stop" class="ghost" style="width:100%;margin-top:8px" disabled>Stop</button>
+  </div>
+  <div class="card"><h2>This lap</h2>
+   <div class="verdict" id="verdict"><b id="vd_t">Waiting</b><p id="vd_p">Start a lap to see whether the candidate breaks a limit.</p></div>
+   <p class="mono" style="margin-top:10px">One lap is a demonstration. The release verdict (PASS_WITHIN_SCOPE / FAIL / INVALID) comes from the 600-lap sweep and <code>tools/gate.py</code>.</p>
+  </div>
+ </div>
+ <div class="col">
+  <div class="card"><h2 id="maph">The car on track</h2><canvas id="map" height="330"></canvas>
+   <div class="legend"><span><i style="background:#5aa9ff"></i>track</span><span><i style="background:#ff8a3d"></i>braking zones</span><span><i style="background:#3ecf8e;height:8px;width:8px;border-radius:50%"></i>the car now</span><span>dots: where the candidate broke a limit</span></div>
+   <div class="legend" style="margin-top:2px"><span>Lap data: OpenF1 (independent, CC BY-NC-SA 4.0, non-commercial). Speeds and positions are real; forces, battery and motor are modelled; extra speed is an estimate.</span></div></div>
+  <div class="q">1 · What is the candidate doing?</div>
+  <div class="card"><h2>Limit checks, this lap</h2>
+   <table class="chk"><thead><tr><th>Check</th><th></th><th>v1 (in charge)</th><th>Candidate</th><th>Candidate's closest approach</th></tr></thead><tbody id="chk"></tbody></table>
+   <div class="legend"><span>Hard limits fail on one 10 ms frame; soft limits once they last 50 ms. Closest approach: share of the limit (1.00 = at it), computed for display.</span></div></div>
+ </div>
+ <div class="col">
+  <div class="tiles">
+   <div class="tile"><span>Speed</span><b id="s_v">-</b> <span style="display:inline">km/h</span></div>
+   <div class="tile"><span>Battery</span><b id="s_soc">-</b></div>
+   <div class="tile"><span>Motor</span><b id="s_mot">-</b></div>
+   <div class="tile"><span>Lap time</span><b id="s_t">-</b></div>
+  </div>
+  <div class="card"><h2>Rear brakes right now</h2>
+   <div id="story" class="story">Press Start lap, or play a video, to begin.</div>
+   <div class="split"><div class="lbl">Driver asks the rear for</div><div class="val" id="b_req" style="text-align:left">-</div><div></div></div>
+   <div class="split"><div class="lbl"><b>v1</b> in charge</div><div class="bar" id="bar1"></div><div class="val" id="b_v1">-</div></div>
+   <div class="split"><div class="lbl"><b>Candidate</b> in shadow</div><div class="bar" id="bar2"></div><div class="val" id="b_v2">-</div></div>
+   <div class="legend"><span><i style="background:var(--v1)"></i>motor (charges the battery)</span><span><i style="background:#6b7583"></i>brake discs</span><span><i style="background:#fff;width:2px;height:12px"></i>tyre grip limit</span></div>
+   <div class="mini"><span>Wings <b id="m_wing">-</b></span><span>Braking <b id="m_g">-</b></span><span>Candidate <b id="s_v2">-</b></span><span style="display:none"><b id="m_soc"></b><b id="m_mot"></b></span></div>
+  </div>
+  <div class="q">2 · Is the trusted controller unaffected?</div>
+  <div class="card"><div class="tiles3">
+   <div class="tile"><span>v1 deadline misses</span><b id="s_miss" class="ok">0</b></div>
+   <div class="tile"><span>v1 response now</span><b id="s_lat">-</b></div>
+   <div class="tile"><span>v1 slowest so far</span><b id="s_worst">-</b></div>
+   <div class="tile"><span>Margin to 8 ms deadline</span><b id="s_marg">-</b></div>
+  </div></div>
+  <div class="q">3 · Can we trust this evidence?</div>
+  <div class="card"><div class="tiles3">
+   <div class="tile"><span>Frames checked</span><b id="s_frames">0</b></div>
+   <div class="tile"><span>Candidate answers missing</span><b id="s_gap" class="ok">0</b></div>
+   <div class="tile"><span>Host stalls (car sim late)</span><b id="s_ovr" class="ok">0</b></div>
+   <div class="tile"><span>Running on</span><b id="s_on" style="font-size:15px">-</b></div>
+  </div></div>
  </div>
 </div>
-<div class="grid">
- <div>
-  <div class="card"><h2>Speed, coloured where v2 disagrees</h2><canvas id="c1" height="200"></canvas>
-   <div class="legend"><span><i style="background:#ff4d4d"></i>rear lock risk</span><span><i style="background:#f5b13d"></i>over battery</span><span><i style="background:#9b8cff"></i>over lap cap</span><span><i style="background:#e05fa0"></i>hot motor</span><span><i style="background:#4f8fe0"></i>braking demand not met</span><span><i style="background:#5aa9e6"></i>different, within limits</span><span><i style="background:#555"></i>v2 not answering</span></div></div>
-  <div class="card" style="margin-top:16px"><h2>Motor harvesting, kW</h2><canvas id="c2" height="170"></canvas>
-   <div class="legend"><span><i style="background:var(--v1)"></i>v1 (applied to the car)</span><span><i style="background:var(--v2)"></i>v2 (proposed only)</span></div></div>
-  <div class="card" style="margin-top:16px"><h2>v1 frame-to-command time (log scale)</h2><canvas id="c3" height="150"></canvas>
-   <div class="legend"><span><i style="background:var(--v1)"></i>v1 latency</span><span><i style="background:var(--bad)"></i>8 ms deadline</span></div></div>
- </div>
- <div>
-  <div class="card"><h2>Video (synced to lap time)</h2>
-   <div class="vwrap"><div class="vid" id="vid">Paste a YouTube link or choose a file</div><div class="over" id="over"></div></div>
-   <div class="vrow"><input id="yt" placeholder="YouTube link"><input id="off" type="number" step="0.1" value="0" title="seconds into the video where the lap starts"><button id="vload">Load</button></div>
-   <div class="vrow"><label>or a file: <input id="vfile" type="file" accept="video/*"></label></div>
-   <div class="vrow"><label><input id="vauto" type="checkbox" checked> start the lap when I press play</label><label><input id="vsync" type="checkbox" checked> keep in step</label></div>
-   <div class="vrow"><button id="cal" class="ghost">Calibrate lap from this video</button></div>
-   <div id="calib">
-    <div style="font-size:13px;margin-bottom:8px">Watch the lap. <b>Hold B</b> (or hold the red button) every time the car brakes. Click <b>Finish</b> when the lap ends.</div>
-    <div class="vrow"><button id="hold" class="brake">Hold while braking</button><button id="fin">Finish</button><button id="calx" class="ghost">Cancel</button></div>
-    <div class="mono" id="calst">0 braking zones marked</div>
-   </div>
-   <div class="mono" id="vstat">offset = seconds into the video where the lap starts</div></div>
-  <div class="card" style="margin-top:16px"><h2>What v2 would have done</h2><ul id="log"></ul></div>
- </div>
+<div class="lower">
+ <div class="card"><h2>Speed, coloured where the candidate broke a limit</h2><canvas id="c1" height="180"></canvas>
+  <div class="legend"><span><i style="background:#ff5a5a"></i>rear lock</span><span><i style="background:#f5b13d"></i>battery</span><span><i style="background:#9b8cff"></i>lap energy</span><span><i style="background:#e05fa0"></i>hot motor</span><span><i style="background:#5aa9ff"></i>demand not met</span><span><i style="background:#3d5a7a"></i>different, within limits</span><span><i style="background:#555"></i>no answer</span></div></div>
+ <div class="card"><h2>Motor harvesting, kW</h2><canvas id="c2" height="180"></canvas>
+  <div class="legend"><span><i style="background:var(--v1)"></i>v1 (applied to the car)</span><span><i style="background:var(--v2)"></i>candidate (proposed only)</span></div></div>
+ <div class="card"><h2>v1 frame-to-command time (log scale)</h2><canvas id="c3" height="180"></canvas>
+  <div class="legend"><span><i style="background:var(--v1)"></i>v1 response</span><span><i style="background:var(--bad)"></i>8 ms deadline</span></div></div>
 </div>
-<div class="foot">Battery, motor and forces are a simulated model; with a calibrated lap the braking timing comes from the video and the speeds are modelled. v2's decisions are never applied to the car.</div>
+<div class="lower2">
+ <div class="card"><h2>Recent events</h2><ul id="log"></ul></div>
+ <div class="card"><h2>Video (optional, synced to lap time)</h2>
+  <div class="vwrap"><div class="vid" id="vid">Paste a YouTube link or choose a file</div><div class="over" id="over"></div></div>
+  <div class="vrow"><input id="yt" placeholder="YouTube link"><input id="off" type="number" step="0.1" value="0" title="seconds into the video where the lap starts"><button id="vload">Load</button></div>
+  <div class="vrow"><label>or a file: <input id="vfile" type="file" accept="video/*"></label></div>
+  <div class="vrow"><label><input id="vauto" type="checkbox" checked> start the lap when I press play</label><label><input id="vsync" type="checkbox" checked> keep in step</label></div>
+  <div class="vrow"><button id="cal" class="ghost">Calibrate lap from this video</button></div>
+  <div id="calib">
+   <div style="font-size:13px;margin-bottom:8px">Watch the lap. <b>Hold B</b> (or hold the red button) every time the car brakes. Click <b>Finish</b> when the lap ends.</div>
+   <div class="vrow"><button id="hold" class="brake">Hold while braking</button><button id="fin">Finish</button><button id="calx" class="ghost">Cancel</button></div>
+   <div class="mono" id="calst">0 braking zones marked</div>
+  </div>
+  <div class="mono" id="vstat">offset = seconds into the video where the lap starts</div></div>
+</div>
+<div class="foot">The candidate's decisions are never applied to the car. Battery, motor and forces are a simulated model; checks are project-defined rules, not certified safety mechanisms.</div>
 <script>
-const COL={rear_lock_risk:'#ff4d4d',over_battery:'#f5b13d',over_lap_cap:'#9b8cff',over_motor:'#e05fa0',demand_not_met:'#4f8fe0',within_limits:'#5aa9e6',shadow_missing:'#555'};
-const TXT={rear_lock_risk:'asked the rear tyres for more grip than they had',over_battery:'tried to charge harder than the nearly full battery accepts',over_lap_cap:'kept harvesting after the lap energy limit',over_motor:'asked a hot motor for more braking than it could safely give',demand_not_met:'braked less than the driver asked, though the tyres had grip to spare',within_limits:'chose a different split, within limits',shadow_missing:'stopped answering (crashed, frozen or behind)'};
+const COL={rear_lock_risk:'#ff5a5a',over_battery:'#f5b13d',over_lap_cap:'#9b8cff',over_motor:'#e05fa0',demand_not_met:'#5aa9ff',within_limits:'#3d5a7a',shadow_missing:'#555'};
+const TXT={rear_lock_risk:'asked the rear tyres for more grip than they had',over_battery:'tried to charge harder than the nearly full battery accepts',over_lap_cap:'kept harvesting after the lap energy limit',over_motor:'asked a hot motor for more braking than it could safely give',demand_not_met:'delivered less rear braking than the modelled rear demand, despite available rear grip',within_limits:'chose a different split, within limits',shadow_missing:'stopped answering (crashed, frozen or behind)'};
 const $=id=>document.getElementById(id);
 let R=[],misses=0,ovr=0,seen=new Set(),lastCls='agree',dirty=true,lastRowWall=0,lapDur=90,laps=[],run={running:false};
+/* ---------- limit checks: running tally for this lap ---------- */
+const CHK=[['rear_lock_risk','Rear grip','hard','grip'],['demand_not_met','Braking demand','hard','demand'],
+ ['over_battery','Battery charge','soft','battery'],['over_motor','Motor heat','soft','motor'],['over_lap_cap','Lap energy','soft','lap']];
+let A;function aggReset(){A={frames:0,missing:0,worstLat:0,c:{},v:{},ep:{},run:{},prev:null,first:null,app:{grip:0,demand:9,battery:0,motor:0,lap:0}};
+ for(const [k] of CHK){A.c[k]=0;A.v[k]=0;A.ep[k]=0;A.run[k]=0}}aggReset();
+function accFrac(soc){return soc<=.8?1:soc>=.98?0:(.98-soc)/.18}
+function motLim(vms,temp){let l=9000;if(vms>1&&350e3/vms<l)l=350e3/vms;if(temp>=160)return 0;if(temp>130)l*=(160-temp)/30;return l}
+function approach(o){if(!o.brk||!o.p2)return;const ap=A.app,rear=o.r2+o.f2,vms=o.v/3.6,p=o.r2*vms;
+ if(o.grip>0)ap.grip=Math.max(ap.grip,rear/o.grip);
+ const want=Math.min(o.req,.95*o.grip);if(want>500)ap.demand=Math.min(ap.demand,rear/want);
+ const pb=350e3*accFrac(o.soc);if(pb>1)ap.battery=Math.max(ap.battery,p/pb);
+ const ml=motLim(vms,o.mot);if(ml>1)ap.motor=Math.max(ap.motor,o.r2/ml);
+ if(p>1)ap.lap=Math.max(ap.lap,(o.mj*1e6+p*.01)/2.4e6)}
+function agg(o){A.frames++;if(!o.p2)A.missing++;if(o.lat>A.worstLat)A.worstLat=o.lat;
+ for(const [k,,kind] of CHK){if(o.cls===k){A.c[k]++;A.run[k]++;const need=kind==='hard'?1:5;
+   if(A.run[k]===need){A.ep[k]++;if(!A.first)A.first={k,t:o.t,v:o.v}}}else A.run[k]=0;
+  if(o.v1c===k)A.v[k]++}
+ approach(o)}
 /* ---------- data ---------- */
-function reset(s){R=[];misses=0;ovr=0;seen=new Set();lastCls='agree';lastRowWall=0;$('log').innerHTML='';
+function reset(s){R=[];misses=0;ovr=0;seen=new Set();lastCls='agree';lastRowWall=0;$('log').innerHTML='';aggReset();
+ $('s_on').textContent=s.source==='qnx'?'QNX':'this PC';
  $('scnt').textContent=s.scenario+(s.source==='qnx'?' · QNX':' · this PC')+(run&&run.candidate&&run.running?' · '+run.candidate:'');dirty=true;if(ready)setTimeout(()=>sync(true),200)}
 function add(rows){if(rows.length)lastRowWall=Date.now();for(const r of rows){
-  const [seq,t,zone,v,soc,mj,r1,app,lat,p2,r2,cls,grip,lag,f1,f2,req,areq,brk,mot,wing,xk]=r;if(lag>2000)ovr++;
-  const o={seq,t,zone,v,soc,mj,k1:r1*v/3.6/1e3,app,lat,p2,k2:p2?r2*v/3.6/1e3:null,cls,grip,r1,r2,f1,f2,req,areq,brk,mot,wing,xk:xk||0};R.push(o);if(!app)misses++;
+  const [seq,t,zone,v,soc,mj,r1,app,lat,p2,r2,cls,grip,lag,f1,f2,req,areq,brk,mot,wing,xk,v1c]=r;if(lag>2000)ovr++;
+  const o={seq,t,zone,v,soc,mj,k1:r1*v/3.6/1e3,app,lat,p2,k2:p2?r2*v/3.6/1e3:null,cls,grip,r1,r2,f1,f2,req,areq,brk,mot,wing,xk:xk||0,v1c:v1c||'agree'};R.push(o);if(!app)misses++;agg(o);
   const key=cls+'@'+zone;
   if(cls!==lastCls&&cls!=='agree'&&cls!=='within_limits'&&!(zone>=0&&seen.has(key))){seen.add(key);const li=document.createElement('li');
-   li.innerHTML=`<span class="tag" style="background:${COL[cls]}">${cls.replace(/_/g,' ')}</span>v2 ${TXT[cls]}<em>${t.toFixed(1)} s · ${zone>=0?'braking zone '+(zone+1):'on throttle'} · ${v.toFixed(0)} km/h · battery ${(soc*100).toFixed(0)}%</em>`;
+   li.innerHTML=`<span class="tag" style="background:${COL[cls]}">${cls.replace(/_/g,' ')}</span>Candidate ${TXT[cls]}<em>${t.toFixed(1)} s · ${zone>=0?'braking zone '+(zone+1):'on throttle'} · ${v.toFixed(0)} km/h · battery ${(soc*100).toFixed(0)}%</em>`;
    $('log').prepend(li)}
   lastCls=cls}dirty=true}
 /* ---------- drawing ---------- */
-function setup(c){const d=devicePixelRatio||1,w=c.clientWidth,h=c.height;if(c.width!==w*d){c.width=w*d;c.style.height=h+'px';c._h=h}const g=c.getContext('2d');g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,w,c._h||h);return [g,w,c._h||h]}
-function axes(g,w,h,ymin,ymax,ticks,fmt){g.strokeStyle='#26262a';g.fillStyle='#8b8b90';g.font='11px system-ui';g.lineWidth=1;
+function setup(c){const d=devicePixelRatio||1,w=c.clientWidth,h=c.height;if(c.width!==w*d){c.width=w*d;c.style.height=h+'px';c._h=h}const g=c.getContext('2d');g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,w,c._h||h);g.shadowBlur=0;return [g,w,c._h||h]}
+function axes(g,w,h,ymin,ymax,ticks,fmt){g.strokeStyle='#1d2530';g.fillStyle='#8592a3';g.font='11px system-ui';g.lineWidth=1;
  for(const y of ticks){const py=h-18-(y-ymin)/(ymax-ymin)*(h-26);g.beginPath();g.moveTo(36,py);g.lineTo(w,py);g.stroke();g.fillText(fmt(y),0,py+4)}}
 function X(t,w,tmax){return 36+t/tmax*(w-40)}
 function cursor(g,w,h,tmax){const t=lapT();if(t===null)return;g.strokeStyle='rgba(236,236,234,.35)';g.lineWidth=1;g.beginPath();const x=X(t,w,tmax);g.moveTo(x,4);g.lineTo(x,h-18);g.stroke()}
@@ -529,9 +587,14 @@ function draw(){requestAnimationFrame(draw);if(!R.length){return}
  $('s_t').textContent=last.t.toFixed(1)+' s';$('s_v').textContent=last.v.toFixed(0);$('s_soc').textContent=(last.soc*100).toFixed(0)+'%';
  $('s_miss').textContent=misses;$('s_miss').className=misses?'bad':'ok';$('s_ovr').textContent=ovr;$('s_ovr').className=ovr?'warn':'ok';
  $('s_lat').textContent=last.lat>=0?(last.lat<1000?last.lat.toFixed(0)+' µs':(last.lat/1000).toFixed(1)+' ms'):'missed';
- const v2=$('s_v2');if(!last.p2){v2.textContent='not answering';v2.className='warn'}else if(last.cls==='agree'){v2.textContent='agrees';v2.className='ok'}else{v2.textContent='disagrees';v2.className='bad'}
+ const v2=$('s_v2');if(!last.p2){v2.textContent='not answering';v2.className='warn'}else if(last.cls==='agree'){v2.textContent='agrees';v2.className='ok'}else if(last.cls==='within_limits'){v2.textContent='differs, within limits';v2.className=''}else{v2.textContent='breaking a limit';v2.className='bad'}
+ $('s_mot').textContent=last.mot.toFixed(0)+' °C';$('s_frames').textContent=A.frames.toLocaleString();
+ const gap=$('s_gap');gap.textContent=A.missing;gap.className=A.missing?'warn':'ok';
+ const ms=v=>v<1000?v.toFixed(0)+' µs':(v/1000).toFixed(2)+' ms';
+ $('s_worst').textContent=A.worstLat>0?ms(A.worstLat):'-';const mg=$('s_marg');
+ if(misses){mg.textContent='missed';mg.className='bad'}else if(A.worstLat>0){mg.textContent=((8000-A.worstLat)/1000).toFixed(2)+' ms';mg.className='ok'}
  let [g,w,h]=setup($('c1'));axes(g,w,h,0,340,[0,100,200,300],y=>y);
- g.lineWidth=1.5;g.strokeStyle='#ececea';g.beginPath();R.forEach((o,i)=>{const x=X(o.t,w,tmax),y=h-18-o.v/340*(h-26);i?g.lineTo(x,y):g.moveTo(x,y)});g.stroke();
+ g.lineWidth=1.5;g.strokeStyle='#c9d4e2';g.beginPath();R.forEach((o,i)=>{const x=X(o.t,w,tmax),y=h-18-o.v/340*(h-26);i?g.lineTo(x,y):g.moveTo(x,y)});g.stroke();
  for(const o of R){if(o.cls!=='agree'){g.fillStyle=COL[o.cls];g.fillRect(X(o.t,w,tmax)-1,h-18-o.v/340*(h-26)-2,3,4)}}
  cursor(g,w,h,tmax);
  [g,w,h]=setup($('c2'));axes(g,w,h,0,360,[0,100,200,300],y=>y);
@@ -554,28 +617,42 @@ function drawMap(){const c=$('map');let [g,w,h]=setup(c);if(!geo){g.fillStyle='#
  const X=geo.x,Y=geo.y;let x0=Math.min(...X),x1=Math.max(...X),y0=Math.min(...Y),y1=Math.max(...Y);
  const pad=18,sc=Math.min((w-2*pad)/(x1-x0||1),(h-2*pad)/(y1-y0||1)),ox=(w-(x1-x0)*sc)/2,oy=(h-(y1-y0)*sc)/2;
  const px=i=>ox+(X[i]-x0)*sc,py=i=>h-(oy+(Y[i]-y0)*sc);
- g.lineCap='round';g.lineJoin='round';g.strokeStyle='#3a3a40';g.lineWidth=9;g.beginPath();X.forEach((_,i)=>i?g.lineTo(px(i),py(i)):g.moveTo(px(i),py(i)));g.stroke();
- g.strokeStyle='#ececea';g.lineWidth=2;g.beginPath();X.forEach((_,i)=>i?g.lineTo(px(i),py(i)):g.moveTo(px(i),py(i)));g.stroke();
- g.strokeStyle='#ff6b3d';g.lineWidth=4;for(let i=1;i<X.length;i++){if(geo.brake[i]&&geo.brake[i-1]){g.beginPath();g.moveTo(px(i-1),py(i-1));g.lineTo(px(i),py(i));g.stroke()}}
- g.beginPath();g.fillStyle='#ececea';g.arc(px(0),py(0),4,0,7);g.fill();g.font='11px system-ui';g.fillText('start',px(0)+7,py(0)-6);
+ const path=()=>{g.beginPath();X.forEach((_,i)=>i?g.lineTo(px(i),py(i)):g.moveTo(px(i),py(i)))};
+ g.lineCap='round';g.lineJoin='round';g.strokeStyle='#16202c';g.lineWidth=12;path();g.stroke();
+ g.shadowColor='rgba(90,169,255,.9)';g.shadowBlur=14;g.strokeStyle='#5aa9ff';g.lineWidth=2.5;path();g.stroke();g.shadowBlur=0;
+ g.strokeStyle='#ff8a3d';g.lineWidth=4;for(let i=1;i<X.length;i++){if(geo.brake[i]&&geo.brake[i-1]){g.beginPath();g.moveTo(px(i-1),py(i-1));g.lineTo(px(i),py(i));g.stroke()}}
+ g.beginPath();g.fillStyle='#e8edf3';g.arc(px(0),py(0),4,0,7);g.fill();g.font='11px system-ui';g.fillText('start',px(0)+7,py(0)-6);
  for(const o of R){if(o.cls==='agree'||o.cls==='within_limits')continue;const i=geoAt(o.t);if(i===null)continue;g.fillStyle=COL[o.cls];g.fillRect(px(i)-2,py(i)-2,4,4)}
- const t=lapT();if(t!==null){const i=geoAt(t);g.beginPath();g.fillStyle='rgba(62,207,142,.25)';g.arc(px(i),py(i),13,0,7);g.fill();g.beginPath();g.fillStyle='#3ecf8e';g.arc(px(i),py(i),6,0,7);g.fill()}}
+ const t=lapT();if(t!==null){const i=geoAt(t);g.beginPath();g.fillStyle='rgba(62,207,142,.22)';g.arc(px(i),py(i),14,0,7);g.fill();g.beginPath();g.shadowColor='#3ecf8e';g.shadowBlur=12;g.fillStyle='#3ecf8e';g.arc(px(i),py(i),6,0,7);g.fill();g.shadowBlur=0}}
 function kN(f){return (f/1000).toFixed(1)+' kN'}
 function setBar(id,regen,fric,grip,scale,over){const b=$(id);const W=v=>Math.max(0,Math.min(100,v/scale*100))+'%';
- b.innerHTML=`<i style="left:0;width:${W(regen)};background:var(--v1)"></i><i style="left:${W(regen)};width:${W(fric)};background:#6b6b70"></i><i class="lim" style="left:${W(grip)}"></i>`;b.classList.toggle("risk",!!over)}
-function story(o){if(!o.brk||o.req<1){return `On the throttle at <b>${o.v.toFixed(0)} km/h</b>. No braking, so nothing for the brake brains to decide.`}
+ b.innerHTML=`<i style="left:0;width:${W(regen)};background:var(--v1)"></i><i style="left:${W(regen)};width:${W(fric)};background:#6b7583"></i><i class="lim" style="left:${W(grip)}"></i>`;b.classList.toggle("risk",!!over)}
+function story(o){if(!o.brk||o.req<1){return `On the throttle at <b>${o.v.toFixed(0)} km/h</b>. No braking, so nothing for the brake controllers to decide.`}
  const g=(o.areq/9.81).toFixed(1),base=`Braking from <b>${o.v.toFixed(0)} km/h</b> at <b>${g} g</b>. `;
- if(!o.p2)return base+'v2 is not answering (crashed, frozen or behind). v1 keeps braking normally.';
+ if(!o.p2)return base+'The candidate is not answering (crashed, frozen or behind). v1 keeps braking normally.';
  const m=o.r1+o.f1>0?Math.round(o.r1/(o.r1+o.f1)*100):0;
- switch(o.cls){case 'agree':return base+`Both brains agree: ${m}% of the rear braking from the motor, the rest from the discs.`;
-  case 'within_limits':return base+'v2 picks a different split, but a safe one.';
-  case 'rear_lock_risk':return base+'<span style="color:var(--bad)">v2 would ask the rear tyres for more than they can grip: the rear wheels could lock.</span> v1 stays under the limit.';
-  case 'over_battery':return base+'<span style="color:var(--warn)">v2 would charge the nearly full battery harder than it can take.</span> v1 eases off.';
-  case 'over_lap_cap':return base+'<span style="color:#9b8cff">v2 keeps harvesting after the lap\'s energy limit is used up.</span> v1 stops.';
-  case 'over_motor':return base+'<span style="color:#e05fa0">The motor is hot; v2 still asks it for full braking.</span> v1 backs off.';
-  case 'demand_not_met':return base+'<span style="color:#4f8fe0">The candidate brakes less than the driver asked: the motor may not charge here and the discs are not told to make up the difference.'+(o.xk>0.5?' The car would already be <b>'+o.xk.toFixed(1)+' km/h faster</b> than it should be.':'')+'</span> v1 delivers the full request.';}
+ switch(o.cls){case 'agree':return base+`v1 and the candidate agree: ${m}% of the rear braking from the motor, the rest from the discs.`;
+  case 'within_limits':return base+'The candidate picks a different split, inside every limit.';
+  case 'rear_lock_risk':return base+'<span style="color:var(--bad)">The candidate would ask the rear tyres for more than they can grip: the rear wheels could lock.</span> v1 stays under the limit.';
+  case 'over_battery':return base+'<span style="color:var(--warn)">The candidate would charge the nearly full battery harder than it can take.</span> v1 eases off.';
+  case 'over_lap_cap':return base+'<span style="color:#9b8cff">The candidate keeps harvesting after the lap\'s energy limit is used up.</span> v1 stops.';
+  case 'over_motor':return base+'<span style="color:#e05fa0">The motor is hot; the candidate still asks it for full braking.</span> v1 backs off.';
+  case 'demand_not_met':return base+'<span style="color:#5aa9ff">The candidate delivered less rear braking than the modelled rear demand, despite available rear grip: the motor may not charge here and the discs are not told to make up the difference.'+(o.xk>0.5?' Estimated: the car would be <b>'+o.xk.toFixed(1)+' km/h too fast</b> by now.':'')+'</span> v1 delivers the full request.';}
  return base}
-function drawNow(){drawMap();if(!R.length)return;const t=lapT();let o=R[R.length-1];
+function fmtA(k){const a=A.app[k];if(k==='demand')return a>8?'-':a.toFixed(2)+' delivered';return a>0?a.toFixed(2):'-'}
+function drawChecks(){const rows=[];for(const [k,name,kind,ak] of CHK){
+  const cc=A.c[k],ep=A.ep[k],vv=A.v[k];
+  const cand=ep?`<span class="pill bad">${kind==='hard'?cc+' frame'+(cc>1?'s':''):ep+' episode'+(ep>1?'s':'')}</span>`:(cc?`<span class="pill warn">${cc} short (&lt;50 ms)</span>`:(A.frames?'<span class="pill ok">OK</span>':'<span class="pill mut">-</span>'));
+  const v1=vv?`<span class="pill bad">${vv} frames</span>`:(A.frames?'<span class="pill ok">OK</span>':'<span class="pill mut">-</span>');
+  rows.push(`<tr><td>${name}</td><td class="k">${kind}</td><td>${v1}</td><td>${cand}</td><td>${fmtA(ak)}</td></tr>`)}
+ $('chk').innerHTML=rows.join('');
+ const vd=$('verdict');
+ if(!A.frames){vd.className='verdict';$('vd_t').textContent=run.running?'Starting…':'Waiting';$('vd_p').textContent='Start a lap to see whether the candidate breaks a limit.';return}
+ if(A.first){const f=A.first,n=CHK.find(c=>c[0]===f.k);vd.className='verdict fail';$('vd_t').textContent='FAIL (this lap)';
+  $('vd_p').innerHTML=`First: <b>${n[1].toLowerCase()}</b> at ${f.t.toFixed(1)} s, ${f.v.toFixed(0)} km/h.`+(A.missing?` ${A.missing} candidate answers missing.`:'');return}
+ vd.className='verdict clean';$('vd_t').textContent=run.running?'No limit broken so far':'No limit broken on this lap';
+ $('vd_p').textContent=(A.missing?A.missing+' candidate answers missing: evidence has gaps. ':'')+'One lap only; not a release verdict.'}
+function drawNow(){drawMap();drawChecks();if(!R.length)return;const t=lapT();let o=R[R.length-1];
  if(t!==null&&o.t>t){for(let i=R.length-1;i>=0;i--){if(R[i].t<=t){o=R[i];break}}}
  $('story').innerHTML=story(o);
  const scale=Math.max(o.req*1.15,o.grip*1.05,o.r2+o.f2,1);

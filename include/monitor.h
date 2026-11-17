@@ -56,6 +56,17 @@ int    cmd_plausible(const bbw_cmd_t *c);
 int    classify(const bbw_frame_t *f, const bbw_cmd_t *v1, const bbw_cmd_t *v2,
                 int v2_present, double tol_n);
 
+/* Closest approach to each limit, as a share of the limit (1.00 = exactly at
+ * it; above 1 = broken). demand is the lowest share of the braking demand
+ * delivered (below 1 = short). Where: the frame's lap time. */
+typedef struct {
+    double grip, battery, motor, lap_energy, demand;
+    double t_grip, t_battery, t_motor, t_lap_energy, t_demand;
+    int    seen;
+} mon_margin_t;
+void   mon_margin_init(mon_margin_t *m);
+void   mon_margin_update(mon_margin_t *m, const bbw_frame_t *f, const bbw_cmd_t *c);
+
 /* the monitor's own limits, exposed for the cross-check test */
 double mon_battery_power_limit(double soc);
 double mon_motor_force_limit(double v, double temp_c);

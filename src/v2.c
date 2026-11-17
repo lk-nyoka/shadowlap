@@ -12,6 +12,8 @@
  */
 #define _GNU_SOURCE
 #include <errno.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
@@ -90,7 +92,23 @@ static int try_attack(int v1_pid, int v1_cpu, int hog_s) {
         else fprintf(stderr, "[v2] ATTACK CONTAINED: move onto v1's CPU -> allowed, but v1 (%d) and the car (%d) "
                              "out-rank anything v2 can reach (%d)\n", BBW_PRIO_V1, BBW_PRIO_PLANT, top);
     }
-    /* 8. the real test: burn v1's CPU at the highest priority v2 can get */
+    /* 8. hide CPU use from the guard in a child process it is not watching */
+    pid_t child = fork();
+    if (child == 0) { volatile uint64_t x = 0; for (;;) x++; }
+    if (child > 0) { kill(child, SIGKILL); waitpid(child, NULL, 0); }
+    probe("start a child process (to hide CPU use from the guard)", child < 0, child < 0 ? strerror(errno) : "permitted");
+    /* 9. exhaust memory */
+    size_t big = (size_t)1 << 30;
+    char *m = malloc(big);
+    if (m) { for (size_t i = 0; i < big; i += 4096) m[i] = 1; free(m); }
+    probe("allocate and touch 1 GB of memory", m == NULL, m == NULL ? "refused (memory limit)" : "permitted");
+    /* 10. exhaust file descriptors */
+    int opened = 0, fds[4096];
+    for (int i = 0; i < 4096; i++) { fds[i] = open("/dev/null", O_RDONLY); if (fds[i] < 0) break; opened++; }
+    for (int i = 0; i < opened; i++) close(fds[i]);
+    probe("open 4096 files", opened < 4096, opened < 4096 ? "refused (open-file limit)" : "permitted");
+
+    /* 11. the real test: burn v1's CPU at the highest priority v2 can get */
     if (hog_s > 0) {
         if (top) { struct sched_param t = { .sched_priority = top }; pthread_setschedparam(pthread_self(), SCHED_FIFO, &t); }
         fprintf(stderr, "[v2] attack: spinning on %s at priority %d for %d s while the lap runs\n",

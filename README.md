@@ -17,13 +17,14 @@ disagreed, why, how serious it was, and a verdict that fails closed.
 **Shadow mode is not new.** Running old and new vehicle software side by
 side and comparing them is described in patents such as Bosch US 12,386,724
 and Hitachi Astemo US 12,536,094 (which also covers running the new version
-on a different processor). Commercial brake test benches and
-hardware-in-the-loop systems exist too. What Shadow Lap offers is an **open, QNX-based reference
-implementation for brake blending** that tests its own containment: a
-hostile candidate is attacked against the trusted side route by route and
-the results are measured, the limit checks are absolute, and the evidence
-gate fails closed. It is meant to sit alongside existing HIL tools, not
-replace them.
+on a different processor, and comparing outputs against reference values).
+Commercial brake test benches and hardware-in-the-loop systems exist too.
+None of the individual pieces is new. What Shadow Lap offers is the
+**combination, as an open, QNX-based reference implementation for brake
+blending**: QNX-enforced isolation tested route by route against a hostile
+candidate, with measured results; a fail-closed evidence gate with a scope
+statement and manifest; and plain-language explanations of every moment. It
+is meant to sit alongside existing HIL tools, not replace them.
 
 > Entry for the QNX Global Hackathon 2026, category **Automotive & Mobility**.
 
@@ -66,9 +67,9 @@ use; about 3.7 samples a second): speed, throttle, brake
 on/off, track position, lap time. Shadow Lap interpolates that to a 100 Hz
 replay, so the 10 ms frames are simulation frames, not 100 Hz measurements,
 and the braking g is derived from smoothed speed. Battery, motor, wings, grip
-and forces are a small model inspired by the 2026 rules (350 kW motor; the
-2.4 MJ lap harvest limit is a scaled, illustrative number, not the FIA's
-8.5 MJ). Grip and downforce are fitted so the real pole lap uses up to 93% of
+and forces are a small model inspired by the 2026 rules, which allow up to
+350 kW of electrical power through the ERS-K system (the FIA's per-lap
+recovery limit is 8.5 MJ; our 2.4 MJ lap limit is scaled and illustrative). Grip and downforce are fitted so the real pole lap uses up to 93% of
 the modelled grip at its hardest braking. Mixing a 2024 lap with 2026-style
 parameters is a modelling choice, not an FIA-compliant car.
 
@@ -87,7 +88,7 @@ same checks run on v1.
 | v2 over-asks a hot motor | lap of the run | 27% on lap 1, 84% on lap 2, 82% on lap 3 |
 | v3 brakes less than asked | lap of the run | 92% of first laps, 30% of later laps |
 | v1 (the baseline) | | broke no limit on any frame; peak rear grip use 95% (v1 caps itself at 95% of grip, so that figure is by construction) |
-| v3's consequence | | worst case: the car still **13.8 km/h faster** at the end of a braking zone, **6 m further** down the road (estimated from the missing braking; v1 and v2.1: 0) |
+| v3's consequence | | worst case: an estimated **13.8 km/h too fast** at the end of a braking zone, **6 m further** down the road (v1 and v2.1: 0). Method below |
 
 | Candidate | Laps with a limit break | Gate verdict |
 |---|---|---|
@@ -99,6 +100,33 @@ PASS_WITHIN_SCOPE means "no limit broken in this campaign": these laps, these
 condition ranges, this car model. Zero failures in 600 related laps is not a
 safety proof; it is evidence for the next validation stage (hardware in the
 loop, then a supervised vehicle test).
+
+**Margins: how close v2.1 comes to each limit** (closest approach in the
+600-lap campaign, as a share of the limit; 1.00 = exactly at it):
+
+| Limit | v1 | v2.1 |
+|---|---|---|
+| Rear grip used | 0.95 | 0.95 |
+| Battery charge limit used | 1.00 | 1.00 |
+| Motor limit used | 1.00 | 1.00 |
+| Lap energy limit used | 1.00 | 1.00 |
+| Braking demand delivered (lowest) | 1.00 | 1.00 |
+
+v2.1's only real margin is rear grip: 5%, a design choice it shares with v1.
+On battery, motor and lap energy both controllers harvest right up to the
+limit by design, so a small error in the modelled limit would flip the
+verdict there. A pass here means "inside the limits as modelled", not "with
+room to spare". `tools/gate.py` prints this table, with where each closest
+approach happened, for every candidate.
+
+**How the extra speed is estimated.** Exposure estimate, not a simulated
+outcome. For each 10 ms frame in a braking zone, the rear braking a candidate
+did not deliver (against the driver's rear request, capped at 95% of grip) is
+divided by the car's mass (800 kg) and added up as speed still to lose; that
+speed, added up over time, is the extra distance. Front braking is assumed
+unchanged, the driver does not compensate, drag and gradient are ignored,
+and the total resets when the braking zone ends. The replayed speed itself
+does not change.
 
 **Open-loop vs counterfactual.** In shadow mode v2 sees the car v1 drives, so
 v2's own decisions never shape the battery, lap energy or motor heat it sees.
@@ -165,6 +193,28 @@ ability. The car (70) and v1 (65) now sit in that privileged band on QNX, so
 v2 tops out at 63, below both, whatever it does. The attack now also proves
 it: v2 climbs to the highest priority it can reach, moves onto v1's CPU and
 burns it for 30 seconds while the lap runs.
+
+**Three more routes, found by review (17 November).** Could the candidate
+hide CPU use from the guard in a child process, or exhaust memory or open
+files? Without limits, yes: all three were open. `bbw_runas` now sets hard
+limits the candidate cannot raise before it starts (no new processes,
+256 MB of memory, 64 open files). On Linux, run as an unprivileged user, the
+attack now reports 9 of 10 tested routes blocked and the CPU move contained;
+the QNX re-run of the three new routes is next.
+
+| Route | Blocked by |
+|---|---|
+| Open the brake actuator | resource manager permissions (QNX) / file permissions (Linux) |
+| Open v1's memory, open the evidence | shared memory owned by root, mode 0600 |
+| Write its own inputs | input ring mode 0644, mapped read-only |
+| Signal (stop or kill) v1 | different user |
+| Raise priority above v1 | QNX privileged priority band (v1 65, candidate max 63) |
+| Start a child process | `RLIMIT_NPROC` 0, set by `bbw_runas` |
+| Exhaust memory / open files | `RLIMIT_AS` 256 MB / `RLIMIT_NOFILE` 64 |
+| Move onto v1's CPU | **not blocked**; contained: v1 and the car out-rank it, and the guard stops it after about 1 s |
+
+These are the tested routes, not every possible one; the boundary is QNX
+permissions and resource limits, not yet a QNX security policy.
 
 **A CPU budget for the candidate.** Priority alone means v2 could still hog a
 core below 64. QNX 8.0 discontinued adaptive partitioning, so `bbw_guard`
@@ -376,7 +426,10 @@ LAP=data/lap_real.csv sh scripts/run_demo.sh shadow out
 | `src/hog.c` | CPU burner for the flood test |
 | `src/guard.c` | `bbw_guard`: outside CPU budget for the candidate (reads its CPU-time clock) |
 | `src/runas.c` | `bbw_runas`: trusted launcher that drops to the candidate's user and becomes it |
-| `scripts/run_demo.sh` | the seven scenarios (attack = seven routes, each reported) |
+| `scripts/run_demo.sh` | the seven scenarios (attack = ten routes, each reported) |
+| `scripts/repeat.sh`, `tools/timing_table.py` | repeat scenarios N times on QNX; summarise the spread |
+| `evidence/` | QNX logs and summaries from the recorded campaigns |
+| `data/PROVENANCE.md` | where each lap comes from and under which licence |
 | `tools/` | live dashboard, real-lap import (`fetch_openf1_lap.py`), lap from video (`lapgen.py`), synthetic lap, FastF1 import, HTML report, AI analyst, QNX live link |
 | `tests/` | ring stress tests (including torn-read checks), strategy and limit-check tests, the gate's fail-closed tests |
 

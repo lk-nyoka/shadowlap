@@ -176,6 +176,18 @@ def main():
                      "(hardware-in-the-loop, then a supervised vehicle test), not proof of safety.")
     if reasons:
         lines += ["Reasons:", ""] + [f"- {r}" for r in reasons]
+    ca = s.get("closest_approach") if isinstance(s.get("closest_approach"), dict) else {}
+    cw = s.get("closest_approach_where") if isinstance(s.get("closest_approach_where"), dict) else {}
+    if isinstance(ca.get("v2"), dict):
+        names = [("rear_grip", "rear grip used"), ("battery", "battery charge limit used"),
+                 ("motor", "motor limit used"), ("lap_energy", "lap energy limit used"),
+                 ("demand_delivered", "braking demand delivered (lowest)")]
+        lines += ["", f"Closest approach to each limit ({name} vs v1; 1.00 = at the limit):", "",
+                  "| Limit | v1 | " + name + " | where (run, lap, lap time s) |", "|---|---|---|---|"]
+        for k, label in names:
+            w = cw.get(k)
+            lines.append(f"| {label} | {ca.get('v1', {}).get(k, 0):.2f} | {ca['v2'].get(k, 0):.2f} | "
+                         + (f"run {w[0]}, lap {w[1]}, {w[2]:.1f} s" if isinstance(w, list) and len(w) == 3 else "") + " |")
     pk = s.get("peak_rear_grip_use") if isinstance(s.get("peak_rear_grip_use"), dict) else {}
     if pk:
         lines += ["", f"Peak rear grip use: v1 {pk.get('v1', 0):.2f}, {name} {pk.get('v2', 0):.2f} (1.00 = at the limit)."]

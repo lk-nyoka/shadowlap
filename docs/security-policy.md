@@ -96,7 +96,8 @@ on -T bbw_v2_t    ./bbw_v2 --attack          # run as root on purpose
 cat /dev/secpolgenerate/errors               # restricted mode: the denial is logged here
 ```
 
-Pass: every route reports `ATTACK BLOCKED` (the attack now tries seven:
+Pass: every route reports `ATTACK BLOCKED` or `CONTAINED` (the attack now tries ten,
+including a child process, memory and open files; earlier it tried seven:
 actuator, v1's region, evidence, its own inputs, signalling v1, priority,
 CPU), matching entries in the errors log, and v1 still braking normally.
 Record the output; it goes in the demo video.

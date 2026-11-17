@@ -88,3 +88,23 @@ void mon_shortfall_update(mon_shortfall_t *s, const bbw_frame_t *f, const bbw_cm
     if (s->dv * 3.6 > s->worst_kmh) s->worst_kmh = s->dv * 3.6;
     if (s->extra_m > s->worst_m) s->worst_m = s->extra_m;
 }
+
+void mon_margin_init(mon_margin_t *m) {
+    *m = (mon_margin_t){ .demand = 1e9 };
+}
+
+void mon_margin_update(mon_margin_t *m, const bbw_frame_t *f, const bbw_cmd_t *c) {
+    if (!f->brake || f->a_req <= 0) return;
+    double rear = c->f_regen + c->f_friction, p = c->f_regen * f->v, r;
+    m->seen = 1;
+    if (f->f_rear_grip > 0 && (r = rear / f->f_rear_grip) > m->grip) { m->grip = r; m->t_grip = f->t_lap; }
+    double pb = mon_battery_power_limit(f->soc);
+    if (pb > 1.0 && (r = p / pb) > m->battery) { m->battery = r; m->t_battery = f->t_lap; }
+    double fm = mon_motor_force_limit(f->v, f->motor_temp_c);
+    if (fm > 1.0 && (r = c->f_regen / fm) > m->motor) { m->motor = r; m->t_motor = f->t_lap; }
+    if ((r = (f->lap_harvest_j + p * BBW_DT) / MON_LAP_CAP_J) > m->lap_energy && p > 1.0) {
+        m->lap_energy = r; m->t_lap_energy = f->t_lap;
+    }
+    double want = demand_target(f);
+    if (want > 500.0 && (r = rear / want) < m->demand) { m->demand = r; m->t_demand = f->t_lap; }
+}

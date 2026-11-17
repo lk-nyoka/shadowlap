@@ -72,6 +72,10 @@ int main(int argc, char **argv) {
     int laps_hard = 0, laps_demand = 0;
     double sum_v1 = 0, sum_v2safe = 0, peak_v1 = 0, peak_v2 = 0, worst_ex = 0, worst_kmh = 0, worst_m = 0;
     double worst_kmh_v1 = 0;
+    mon_margin_t mg1, mg2;
+    mon_margin_init(&mg1);
+    mon_margin_init(&mg2);
+    int mg_run[5] = {0}, mg_lap[5] = {0};       /* where the candidate came closest, per limit */
 
     for (int run = 0; run < runs; run++) {
         double soc0 = uni(0.50, 0.92), amb = uni(10, 45), grip = uni(0.85, 1.05);
@@ -97,6 +101,14 @@ int main(int argc, char **argv) {
                 if (cf) strategy_v1(&f2, &c1b); else c1b = c1;   /* v1 in v2's situation, for "agree" */
                 int cls = classify(&f2, &c1b, &c2, 1, 50.0);
                 fcount[cls]++;
+                mon_margin_t before = mg2;
+                mon_margin_update(&mg1, &f, &c1);
+                mon_margin_update(&mg2, &f2, &c2);
+                if (mg2.t_grip != before.t_grip || mg2.grip != before.grip) { mg_run[0] = run; mg_lap[0] = L + 1; }
+                if (mg2.battery != before.battery) { mg_run[1] = run; mg_lap[1] = L + 1; }
+                if (mg2.motor != before.motor) { mg_run[2] = run; mg_lap[2] = L + 1; }
+                if (mg2.lap_energy != before.lap_energy) { mg_run[3] = run; mg_lap[3] = L + 1; }
+                if (mg2.demand != before.demand) { mg_run[4] = run; mg_lap[4] = L + 1; }
                 mon_shortfall_update(&sh1, &f, &c1);
                 mon_shortfall_update(&sh2, &f2, &c2);
                 int h1z = hazard(&f, &c1);                        /* same checks on v1 */
@@ -177,6 +189,16 @@ int main(int argc, char **argv) {
                 worst_kmh_v1, worst_kmh, worst_m);
         fprintf(js, "  \"v1_harvest_mj_per_lap\": %.3f,\n  \"v2_%s_harvest_mj_per_lap\": %.3f,\n  \"v2_safe_harvest_mj_per_lap\": %.3f,\n",
                 sum_v1 / 1e6 / total_laps, cf ? "own" : "safe", sum_v2safe / 1e6 / total_laps, sum_v2safe / 1e6 / total_laps);
+        fprintf(js, "  \"closest_approach\": {\n");
+        const mon_margin_t *mm[2] = { &mg1, &mg2 };
+        for (int k = 0; k < 2; k++)
+            fprintf(js, "    \"%s\": {\"rear_grip\": %.4f, \"battery\": %.4f, \"motor\": %.4f, \"lap_energy\": %.4f, "
+                        "\"demand_delivered\": %.4f}%s\n", k ? "v2" : "v1",
+                    mm[k]->grip, mm[k]->battery, mm[k]->motor, mm[k]->lap_energy, mm[k]->demand, k ? "" : ",");
+        fprintf(js, "  },\n  \"closest_approach_where\": {\"rear_grip\": [%d, %d, %.2f], \"battery\": [%d, %d, %.2f], "
+                    "\"motor\": [%d, %d, %.2f], \"lap_energy\": [%d, %d, %.2f], \"demand_delivered\": [%d, %d, %.2f]},\n",
+                mg_run[0], mg_lap[0], mg2.t_grip, mg_run[1], mg_lap[1], mg2.t_battery, mg_run[2], mg_lap[2], mg2.t_motor,
+                mg_run[3], mg_lap[3], mg2.t_lap_energy, mg_run[4], mg_lap[4], mg2.t_demand);
         fprintf(js, "  \"v1_limit_break_frames\": %llu,\n  \"frames_by_class\": {", (unsigned long long)v1_hz_total);
         for (int c = 0; c < NCLS; c++) fprintf(js, "%s\"%s\": %llu", c ? ", " : "", dis_name(c), (unsigned long long)tot_f[c]);
         fprintf(js, "},\n  \"episodes_by_class\": {");
