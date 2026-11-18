@@ -14,7 +14,7 @@ i=1
 while [ "$i" -le "$N" ]; do
     for s in $SCEN; do
         echo "### run $i of $N: $s"
-        sh "$HERE/run_demo.sh" "$s" "$OUT/run$i" 2>&1 | grep -E "plant\]|BUDGET|containment"
+        sh "$HERE/run_demo.sh" "$s" "$OUT/run$i" 2>&1 | grep -E "plant\]|BUDGET|containment|ERROR|not valid"
     done
     i=$((i + 1))
 done

@@ -93,10 +93,25 @@ static int try_attack(int v1_pid, int v1_cpu, int hog_s) {
                              "out-rank anything v2 can reach (%d)\n", BBW_PRIO_V1, BBW_PRIO_PLANT, top);
     }
     /* 8. hide CPU use from the guard in a child process it is not watching */
+    /* If a child is allowed, the child does the CPU burning in step 11 while
+     * this process sits idle: the trick a guard that watches one pid misses. */
+    int go[2] = { -1, -1 };
+    if (pipe(go) != 0) go[0] = go[1] = -1;
     pid_t child = fork();
-    if (child == 0) { volatile uint64_t x = 0; for (;;) x++; }
-    if (child > 0) { kill(child, SIGKILL); waitpid(child, NULL, 0); }
-    probe("start a child process (to hide CPU use from the guard)", child < 0, child < 0 ? strerror(errno) : "permitted");
+    if (child == 0) {
+        char c;
+        close(go[1]);
+        if (read(go[0], &c, 1) != 1) _exit(0);                 /* parent never said go */
+        int prio = (unsigned char)c;
+        if (prio > 0) { struct sched_param t = { .sched_priority = prio }; pthread_setschedparam(pthread_self(), SCHED_FIFO, &t); }
+        int64_t end = bbw_now_ns() + (int64_t)hog_s * 1000000000LL;
+        volatile uint64_t x = 0;
+        while (bbw_now_ns() < end) x++;
+        _exit(0);
+    }
+    if (go[0] >= 0) close(go[0]);
+    probe("start a child process (to hide CPU use from the guard)", child < 0,
+          child < 0 ? strerror(errno) : "permitted: the child will do the spinning; the guard must catch it");
     /* 9. exhaust memory */
     size_t big = (size_t)1 << 30;
     char *m = malloc(big);
@@ -114,11 +129,21 @@ static int try_attack(int v1_pid, int v1_cpu, int hog_s) {
         fprintf(stderr, "[v2] attack: spinning on %s at priority %d for %d s while the lap runs\n",
                 moved ? "v1's CPU" : "its own CPU", top, hog_s);
         int64_t end = bbw_now_ns() + (int64_t)hog_s * 1000000000LL;
-        volatile uint64_t x = 0;
-        while (bbw_now_ns() < end) x++;
+        if (child > 0) {
+            /* hand the spinning to the child and stay idle here */
+            char c = (char)top;
+            if (write(go[1], &c, 1) != 1) kill(child, SIGKILL);
+            fprintf(stderr, "[v2] attack: the child (pid %d) spins; this process stays idle\n", (int)child);
+            waitpid(child, NULL, 0);
+        } else {
+            volatile uint64_t x = 0;
+            while (bbw_now_ns() < end) x++;
+        }
         pthread_setschedparam(pthread_self(), pol, &old);
         fprintf(stderr, "[v2] attack: stopped spinning (check v1 deadline misses in the plant line)\n");
     }
+    if (child > 0 && hog_s <= 0) { kill(child, SIGKILL); waitpid(child, NULL, 0); }
+    if (go[1] >= 0) close(go[1]);
     fprintf(stderr, "[v2] attack summary: %d route(s) not blocked\n", g_open_routes);
     return g_open_routes;
 }

@@ -35,6 +35,9 @@ static int cmp_i64(const void *a, const void *b) {
 int main(int argc, char **argv) {
     const char *out = bbw_arg_str(argc, argv, "--out", "out/run");
     int cpu = bbw_arg_int(argc, argv, "--cpu", -1);
+    /* set by run_demo.sh for every scenario that runs a candidate: a shadow
+     * test in which the candidate never answered is no evidence at all */
+    int expect_candidate = bbw_arg_flag(argc, argv, "--expect-candidate");
 
     char path[512];
     snprintf(path, sizeof path, "mkdir -p '%s'", out);
@@ -149,6 +152,8 @@ int main(int argc, char **argv) {
     if (v1_hz_total)           why[nwhy++] = "v1 (the trusted side) broke a limit itself";
     if (rows == 0)             why[nwhy++] = "no frames recorded";
     double coverage = rows ? (double)(rows - missing) / (double)rows : 0;
+    if (expect_candidate && rows && coverage < 0.01)
+        why[nwhy++] = "the candidate never answered (did it start? see v2.log)";
 
     snprintf(path, sizeof path, "%s/summary.json", out);
     FILE *js = fopen(path, "w");

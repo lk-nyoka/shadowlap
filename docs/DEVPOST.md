@@ -70,8 +70,8 @@ Shadow Lap is a set of QNX 8.0 processes. The isolation that keeps the candidate
 | Privileged priority band: the car at 70, v1 at 65, the guard at 64. The candidate, an unprivileged user, tops out at 63 whatever it does | `include/bbw.h` (`BBW_PRIO_*`), `src/common.c` | Priorities 64+ need `PROCMGR_AID_PRIORITY` |
 | CPU pinning of the car and v1 | `src/common.c` (`ThreadCtl(_NTO_TCTL_RUNMASK, …)`) | Run masks |
 | Hostile-candidate test: tries every route to the trusted side and reports each one | `src/v2.c --attack`, `scripts/run_demo.sh attack` | Permissions, abilities, `ThreadCtl` |
-| CPU-budget guard. Adaptive partitioning is not in QNX 8.0, so we built an outside watchdog that reads the candidate's CPU-time clock every 50 ms and stops it above 40% over 1 s | `src/guard.c` (`clock_getcpuclockid`, `SIGKILL`) | Per-process CPU-time clocks |
-| Trusted launcher: drops the candidate to its own user, sets hard limits (no new processes, 256 MB of memory, 64 open files), then `exec`s in place so the guard watches the right process ID | `src/runas.c` | `setuid`/`initgroups`, `setrlimit` |
+| CPU-budget guard. Adaptive partitioning is not in QNX 8.0, so we built an outside watchdog: every 50 ms it reads the CPU-time clock of **every process the candidate's user owns** and stops them all above 40% of a CPU over 1 s, so a child process can't hide the work | `src/guard.c` (`clock_getcpuclockid`, `DCMD_PROC_INFO`, `SIGKILL`) | Per-process CPU-time clocks, `/proc` |
+| Trusted launcher: drops the candidate to its own user, sets hard limits (256 MB of memory, 64 open files; on Linux also no new processes), then `exec`s in place | `src/runas.c` | `setuid`/`initgroups`, `setrlimit` |
 | Read-only inputs: the candidate maps the input ring read-only; its output goes to a separate region that is validated before use | `src/v2.c`, `src/comparer.c`, `include/bbw.h` | POSIX shared memory, `PROT_READ` |
 | Build and deploy | `Makefile` (`make TARGET=qnx bundle`, `qcc -Vgcc_ntox86_64`) | QNX SDP 8.0 toolchain |
 
@@ -97,7 +97,7 @@ All attack routes, as recorded on QNX:
 | Move onto v1's CPU | contained (out-ranked) |
 | Burn that CPU | stopped by the guard |
 
-<<If you re-ran the attack on QNX with the new limits, add: "A child process, 1 GB of memory and 4096 open files: also blocked on QNX".>>
+<<After the QNX re-run: add the memory, open-file and child-process rows with their QNX results.>>
 
 ### The AI part
 
@@ -133,7 +133,8 @@ It is built so the AI cannot make things up unnoticed:
 
 - **Adaptive partitioning isn't in QNX 8.0.** We had planned to give the candidate a hard CPU budget with it. We replaced it with an outside guard and measured how long it takes to act (968–969 ms) instead of claiming it's instant.
 - **The guard was watching the wrong process.** QNX's `on -u` starts a child process, so the guard watched the launcher, not the candidate. We wrote `bbw_runas`, which `exec`s in place so the process ID stays the same.
-- **Telling a timing failure apart from the host pausing the VM.** QNX runs in QEMU inside WSL2 on a Windows laptop. We separated "v1 missed a deadline" from "the host stalled the whole VM" and report both.
+- **A limit that worked on Linux broke the candidate on QNX, and our evidence didn't notice.** On QNX, `exec` counts against the "no new processes" limit, so the candidate never started in 27 runs, and those runs still looked valid. We fixed both: the guard now watches every process of the candidate's user (so a child process can't hide CPU use), and a run where the candidate never answers is now `INVALID`.
+- **Telling a timing failure apart from the host pausing the VM.** QNX runs in QEMU inside WSL2 on a Windows laptop. We separated "v1 missed a deadline" from "the host stalled the whole VM" and report both. In 27 runs with no candidate at all, v1 missed 4 deadlines in 240,678 frames, each one while the car model itself was frozen 10–375 ms by the host. That is the floor of this setup, not QNX.
 
 ### Accomplishments we're proud of
 

@@ -77,7 +77,7 @@ as_v2() {
 # an outside CPU budget for the candidate (see src/guard.c)
 GUARD_PCT=${GUARD_PCT:-40}
 guard_v2() {
-    BBW_REQUIRE_RT=$REQ "$BIN/bbw_guard" --pid "$1" --budget-pct "$GUARD_PCT" > "$out/guard.log" 2>&1 &
+    BBW_REQUIRE_RT=$REQ "$BIN/bbw_guard" --pid "$1" ${V2_USER:+--user "$V2_USER"} --budget-pct "$GUARD_PCT" > "$out/guard.log" 2>&1 &
     PIDS="$PIDS $!"
 }
 
@@ -111,7 +111,8 @@ run_one() {
     BBW_REQUIRE_RT=$REQ "$BIN/bbw_v1" $PP > "$out/v1.log" 2>&1 &
     V1=$!
     PIDS="$PIDS $V1"
-    "$BIN/bbw_comparer" --out "$out" $SP > "$out/comparer.log" 2>&1 &
+    EXPECT=--expect-candidate; case $s in baseline|attack) EXPECT= ;; esac   # attack mode answers no frames
+    "$BIN/bbw_comparer" --out "$out" $SP $EXPECT > "$out/comparer.log" 2>&1 &
     COMP=$!
     PIDS="$PIDS $COMP"
 
@@ -145,6 +146,10 @@ run_one() {
             guard_v2 $ATK
             wait $ATK
             echo "attack exit code: $?" >> "$out/v2.log"
+            if ! grep -q "attack summary" "$out/v2.log"; then
+                echo "    ERROR: the candidate never ran its attack, so this run tests nothing:"
+                head -2 "$out/v2.log" | sed 's/^/      /'
+            fi
             ;;
         *) echo "unknown scenario $s"; cleanup; return 1 ;;
     esac

@@ -33,8 +33,13 @@ int main(int argc, char **argv) {
     if (!pw) { fprintf(stderr, "[runas] no such user %s\n", argv[1]); return 2; }
     if (pw->pw_uid == 0) { fprintf(stderr, "[runas] refusing to run the candidate as root\n"); return 2; }
     int lim = 0;
-#ifdef RLIMIT_NPROC
-    lim |= cap(RLIMIT_NPROC, 0, "new processes");   /* 0: no fork for a non-root user */
+#if defined(RLIMIT_NPROC) && !defined(__QNX__)
+    /* Linux: 0 = no fork for a non-root user; exec below reuses this process.
+     * Not on QNX: there exec itself counts against RLIMIT_NPROC, so a limit of
+     * 0 stops the candidate from starting at all (EAGAIN, measured 18 Nov).
+     * On QNX child processes are left to the guard, which watches every process
+     * the candidate's user owns (src/guard.c --user). */
+    lim |= cap(RLIMIT_NPROC, 0, "new processes");
 #endif
     lim |= cap(RLIMIT_AS, (rlim_t)256 << 20, "memory");
     lim |= cap(RLIMIT_NOFILE, 64, "open files");

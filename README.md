@@ -202,6 +202,30 @@ limits the candidate cannot raise before it starts (no new processes,
 attack now reports 9 of 10 tested routes blocked and the CPU move contained;
 the QNX re-run of the three new routes is next.
 
+**What QNX taught us about those limits (18 November).** The first QNX run
+with the new limits failed in a way the evidence did not catch: the
+candidate never started. On QNX, `exec` itself counts against
+`RLIMIT_NPROC`, so a limit of 0 stopped `bbw_runas` from becoming the
+candidate (`Resource temporarily unavailable`) in all 27 runs. Two fixes:
+
+- On QNX the launcher no longer sets `RLIMIT_NPROC`; memory and open-file
+  limits stay. Child processes are left to the guard, which now watches
+  **every process of the candidate's user**, not one process ID
+  (`bbw_guard --user`). The attack tests exactly this: when a child is
+  allowed, the child does the CPU burning while the parent stays idle. A
+  guard watching only the parent's PID saw nothing for 4 s while the child
+  burned 99% of a CPU; with `--user` both are stopped after about 1 s.
+- A run whose candidate never answers is now `INVALID` ("the candidate never
+  answered"), and an attack run whose candidate never attacked prints an
+  `ERROR`, so this can't pass silently again.
+
+Those 27 runs therefore had **no candidate** and are not used as evidence
+above. They did show the floor set by the test setup: with no candidate
+running, v1 missed 4 deadlines in 240,678 frames. At every one of them the
+car model itself woke 10–375 ms late in the same frames, i.e. Windows paused
+the whole VM. That is QEMU nested in WSL2, not QNX scheduling, and it is why
+host stalls are reported next to every miss count.
+
 | Route | Blocked by |
 |---|---|
 | Open the brake actuator | resource manager permissions (QNX) / file permissions (Linux) |
@@ -209,7 +233,7 @@ the QNX re-run of the three new routes is next.
 | Write its own inputs | input ring mode 0644, mapped read-only |
 | Signal (stop or kill) v1 | different user |
 | Raise priority above v1 | QNX privileged priority band (v1 65, candidate max 63) |
-| Start a child process | `RLIMIT_NPROC` 0, set by `bbw_runas` |
+| Start a child process | Linux: `RLIMIT_NPROC` 0, set by `bbw_runas`. QNX: allowed (exec counts against that limit there); the guard counts every process of the candidate's user and stops them all |
 | Exhaust memory / open files | `RLIMIT_AS` 256 MB / `RLIMIT_NOFILE` 64 |
 | Move onto v1's CPU | **not blocked**; contained: v1 and the car out-rank it, and the guard stops it after about 1 s |
 
