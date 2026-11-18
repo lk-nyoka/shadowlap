@@ -62,6 +62,10 @@ build/host/test_control: tests/test_control.c src/control.c src/monitor.c includ
 	mkdir -p build/host
 	cc -std=gnu11 -O2 -Wall -Wextra -Iinclude -o $@ tests/test_control.c src/control.c src/monitor.c -lm
 
+# Everything, in rounds (see scripts/check_all.sh)
+check: all
+	sh scripts/check_all.sh
+
 # Copy everything the target needs into one folder for scp/sftp
 bundle: all
 	mkdir -p $(BUILD)/bundle/data
@@ -73,4 +77,4 @@ bundle: all
 clean:
 	rm -rf build
 
-.PHONY: all test clean bundle
+.PHONY: check all test clean bundle

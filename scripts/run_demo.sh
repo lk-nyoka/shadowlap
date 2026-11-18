@@ -151,9 +151,19 @@ run_one() {
 
     echo "$$ $PIDS" > "$OUTROOT/.pids"     # lets "run_demo.sh stop" end a run from outside
     wait $PLANT
+    PLANT_RC=$?
+    if [ "$PLANT_RC" != 0 ]; then
+        echo "    ERROR: the car model (bbw_plant) stopped with an error:"
+        grep -v "^\[plant\] warning" "$out/plant.log" | tail -3 | sed 's/^/      /'
+        cleanup
+        return 1
+    fi
+    # the comparer finishes just after the lap; never wait for it forever
+    ( sleep 20; kill $COMP 2>/dev/null ) & WD=$!
     wait $COMP 2>/dev/null
+    kill $WD 2>/dev/null
     cleanup
-    cat "$out/plant.log" "$out/comparer.log" | grep -E "done|not valid|ERROR" | sed 's/^/    /'
+    cat "$out/plant.log" "$out/comparer.log" | grep -E "done|not valid|ERROR|failed" | sed 's/^/    /'
     # if started with sudo, give the results back to the normal user
     [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUTROOT" 2>/dev/null
     cat "$out"/v2.log "$out"/events.log "$out"/guard.log 2>/dev/null | grep -E "ATTACK|attack:|note:|injected|SIG|BUDGET|containment|within budget" | sed "s/^/    /"

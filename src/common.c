@@ -76,7 +76,10 @@ int bbw_rt_setup(const char *who, int prio, int cpu) {
     g_rt_prio = prio;
     g_rt_cpu = cpu;
     int ok = rt_thread(who, prio, cpu);
-    if (prio > 0 && mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
+    /* Lock memory only when real-time priority was granted. Without it the run's
+     * timing is already marked invalid, and locking future memory under a normal
+     * user's small RLIMIT_MEMLOCK makes later thread stacks fail to allocate. */
+    if (prio > 0 && ok && mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
         ok = rt_fail(who, "mlockall (memory lock)", errno) && ok;
     if (ok && (prio > 0 || cpu >= 0))
         fprintf(stderr, "[%s] real-time: SCHED_FIFO %d, cpu %d, memory locked\n", who, prio, cpu);

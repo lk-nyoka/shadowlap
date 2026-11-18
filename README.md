@@ -328,6 +328,23 @@ sh scripts/run_demo.sh all out               # ~11 min: seven full laps
 python3 tools/report.py out                  # writes out/report.html
 ```
 
+**Check everything, again and again:** one command builds from clean, runs
+every test, the tamper tests (a changed safety monitor or broken evidence
+must give `INVALID`), the 600-lap campaigns for v2, v3 and v2.1 with a new
+random seed each round, and the live scenarios, then writes
+`out/check/check_report.md`. It downloads the real Monza lap if it's missing
+(or falls back to the synthetic lap).
+
+```bash
+make check                                   # 3 rounds
+ROUNDS=10 sh scripts/check_all.sh            # more rounds
+CLONE=1 ROUNDS=1 sh scripts/check_all.sh     # from a fresh copy of this repo
+sudo -E env "PATH=$PATH" sh scripts/check_all.sh   # also runs the attack scenario (needs root to switch user)
+```
+
+On WSL or a cloud VM an occasional v1 deadline miss is reported as a warning:
+those hosts pause now and then. Timing is judged on QNX (`scripts/repeat.sh`).
+
 **AI review:** `python3 tools/analyst.py out/shadow` writes an engineering
 verdict on v2 from the run's evidence, with every number checked against the
 data. Free options (local Ollama or a free Gemini key): [docs/ai-analyst.md](docs/ai-analyst.md).

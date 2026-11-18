@@ -157,7 +157,12 @@ int bbw_actuator_serve_start(void) {
     mode_t old = umask(0);
     int rc = mkfifo(BBW_ACTUATOR_PATH, 0620);
     umask(old);
-    if (rc != 0) { perror("mkfifo"); return -1; }
+    if (rc != 0) {
+        perror("mkfifo " BBW_ACTUATOR_PATH);
+        if (errno == EEXIST)
+            fprintf(stderr, "  it belongs to another user (left by a sudo run?). Remove it once: sudo rm " BBW_ACTUATOR_PATH "\n");
+        return -1;
+    }
     g_fd = open(BBW_ACTUATOR_PATH, O_RDWR);       /* RDWR: never sees EOF */
     if (g_fd < 0) { perror("open actuator"); return -1; }
     return start_thread(serve);
