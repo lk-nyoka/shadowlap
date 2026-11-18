@@ -11,7 +11,7 @@ Shadow Lap
 
 ## Elevator pitch (200 characters max)
 
-Test the next brake controller without putting it in control. On QNX 8.0 the candidate runs in shadow, walled off from the brakes, checked every 10 ms, with a verdict that fails closed.
+Test a brake software update without putting it in control. On QNX 8.0 the update runs in shadow with no path to the brakes; we attack that wall ourselves, and every run ends in evidence.
 
 ## Category
 
@@ -35,13 +35,19 @@ Automotive & Mobility
 
 ### Inspiration
 
-Cars now brake with software, and that software gets updated. In 2025 Volvo recalled more than 11,000 US plug-in hybrids and EVs (NHTSA recall 25V392). With brake software version 3.5.14, braking could be lost after about 100 seconds of coasting downhill in one-pedal mode.
+**A driver loses braking on a long downhill because a brake-software update shipped with a flaw no test caught.** That happened:  in 2025 Volvo recalled more than 11,000 US plug-in hybrids and EVs (NHTSA recall 25V392). With brake software version 3.5.14, braking could be lost after about 100 seconds of coasting downhill in one-pedal mode.
 
 Racing teams have the same problem. A new brake-blending controller (how much braking the motor takes, and how much goes to the discs) can't be trusted on a real car until it has been tested. But a real car is the only place it meets real conditions.
 
 ### What it does
 
-Shadow Lap runs the **candidate** controller beside the **trusted** one (v1) on QNX:
+**In one sentence: the update has no path to the brakes, enforced by QNX permissions rather than promises, and we attack that wall to prove it.**
+
+Two pieces of brake software run side by side on QNX:
+
+- **v1** is today's trusted software. It stays in charge of the brakes.
+- **v2** is the update being tested (the *candidate*). It runs beside v1 in shadow.
+
 
 - **v1 keeps sole control of the brakes.** Only v1 can open the brake actuator.
 - **The candidate sees exactly the same inputs** and makes every decision. Its decisions only go to a log.
@@ -50,7 +56,13 @@ Shadow Lap runs the **candidate** controller beside the **trusted** one (v1) on 
 - **A release gate turns the evidence into a verdict**: `PASS_WITHIN_SCOPE`, `FAIL` or `INVALID`. It fails closed: missing, incomplete or tampered evidence is `INVALID`, never a pass. A pass always states its scope: which laps, which conditions, which model.
 - **A live dashboard** replays a real qualifying lap at Monza (OpenF1 data) and shows three things: what the candidate is doing, whether v1 is unaffected, and whether the evidence can be trusted.
 
-Three candidates show the range. Two have flaws written on purpose; the third is the fix:
+**Measured on QNX first** (QNX SDP 8.0 in QEMU, 16–18 November, all recorded):
+
+- **Every attack route blocked or contained, 5 runs out of 5.** That includes the update hiding its CPU use in a child process: the guard caught both processes every time, after 962–996 ms.
+- **v1 missed 10 of 374,388 deadlines (0.003%) over 42 laps with an update running.** Five of those happened while Windows froze the whole VM for 0.17–0.69 s. We report all of them (details below).
+- **The flawed update fails on QNX too**, on the same real lap, while v1 stays inside every limit (video, 0:48).
+
+**Then modelled, at scale.** Three updates show the range. Two have flaws written on purpose; the third is the fix:
 
 | Candidate | What it changes | 600 laps, changing conditions | Verdict |
 |---|---|---|---|
@@ -75,12 +87,16 @@ Shadow Lap is a set of QNX 8.0 processes. The isolation that keeps the candidate
 | Read-only inputs: the candidate maps the input ring read-only; its output goes to a separate region that is validated before use | `src/v2.c`, `src/comparer.c`, `include/bbw.h` | POSIX shared memory, `PROT_READ` |
 | Build and deploy | `Makefile` (`make TARGET=qnx bundle`, `qcc -Vgcc_ntox86_64`) | QNX SDP 8.0 toolchain |
 
-**Measured on QNX SDP 8.0 in QEMU** (17 November). We ran three scenarios five full laps each: the candidate shadowing, a CPU flood on the candidate's side, and the hostile candidate. That is 133,710 frames in total:
+**Timing, measured on QNX SDP 8.0 in QEMU.** Every scenario was repeated with `scripts/repeat.sh`:
 
-- **v1 missed its 8 ms deadline 0 times.** Its slowest answer took 4.45 ms.
-- **The guard stopped the CPU-burning candidate after 968–969 ms in all 5 attack runs.**
+- **17 November:** 15 laps (shadow, CPU flood, attack; 133,710 frames). v1 missed its 8 ms deadline 0 times; its slowest answer took 4.45 ms.
+- **18 November, with the fixed launcher and guard:** 27 laps across all seven scenarios (240,678 frames). v1 missed 10 deadlines (0.004%). We checked every one frame by frame:
+  - 5 came while the **whole VM was frozen** for 170–690 ms (the car model was late too): the Windows host;
+  - 4 came during short 2–8 ms pauses we can't attribute;
+  - 1 was the first frame of a run.
 
-A separate single run of all seven scenarios also gave 0 misses. Those scenarios include the candidate crashing, hanging for 2 s and being stopped from outside.
+  The laptop was noisier that evening (it was also recording the demo): v1's p99 doubled **even in the baseline runs**, which have no update and no guard.
+- On a missed frame the car falls back to discs only for that 10 ms. Real timing claims need real hardware; the README has the full per-scenario tables.
 
 **The attack test found a real weakness, and QNX's design gave us the fix.** In the first QNX run, the candidate could raise its priority above v1's (v1 was then at 45). The fix: on QNX, unprivileged processes can reach at most priority 63, so we moved the car and v1 into the privileged band above it. The same test now reports that route blocked.
 
@@ -96,10 +112,13 @@ All attack routes, as recorded on QNX:
 | Raise its priority above v1 | blocked |
 | Move onto v1's CPU | contained (out-ranked) |
 | Burn that CPU | stopped by the guard |
-
-<<After the QNX re-run: add the memory, open-file and child-process rows with their QNX results.>>
+| Allocate and touch 1 GB of memory | blocked (memory limit) |
+| Open 4096 files | blocked (open-file limit) |
+| Start a child process to hide CPU use | allowed on QNX (there, `exec` counts against the process limit); the guard counts every process of the update's user and stopped **both** in all 5 runs (962–996 ms) |
 
 ### The AI part
+
+<<Run it once on a real lap before submitting (docs/ai-analyst.md, free with Ollama), then paste one finding from its review here. If you don't run it, move this section to "What's next".>>
 
 `tools/analyst.py` writes an engineering review of a run: a verdict, the problems it found, fixes to make, and the next tests to run. It uses a free local model (Ollama) or a free Gemini key.
 
@@ -140,7 +159,8 @@ It is built so the AI cannot make things up unnoticed:
 
 - A hostile-candidate test that **found a real weakness on QNX**, and a fix that uses QNX's own privilege model.
 - A verdict that **can't pass by accident**: missing evidence is `INVALID`, and the safety checks' code is pinned by hash.
-- Zero v1 deadline misses across 133,710 frames on QNX while the candidate crashed, hung, flooded its CPU and attacked.
+- Every v1 deadline miss is counted and explained, not hidden: 10 in 374,388 frames on QNX, half of them during host freezes, while the update crashed, hung, was starved and attacked.
+- A launcher bug that silently stopped the update from starting on QNX was caught, and the evidence now fails closed on it (`INVALID: the candidate never answered`).
 
 ### What we learned
 

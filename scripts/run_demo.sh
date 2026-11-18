@@ -111,7 +111,9 @@ run_one() {
     BBW_REQUIRE_RT=$REQ "$BIN/bbw_v1" $PP > "$out/v1.log" 2>&1 &
     V1=$!
     PIDS="$PIDS $V1"
-    EXPECT=--expect-candidate; case $s in baseline|attack) EXPECT= ;; esac   # attack mode answers no frames
+    # baseline has no candidate; attack mode answers no frames; flood starves the
+    # candidate on purpose (it tests that v1 survives an overloaded shadow side)
+    EXPECT=--expect-candidate; case $s in baseline|attack|flood) EXPECT= ;; esac
     "$BIN/bbw_comparer" --out "$out" $SP $EXPECT > "$out/comparer.log" 2>&1 &
     COMP=$!
     PIDS="$PIDS $COMP"
@@ -146,7 +148,9 @@ run_one() {
             guard_v2 $ATK
             wait $ATK
             echo "attack exit code: $?" >> "$out/v2.log"
-            if ! grep -q "attack summary" "$out/v2.log"; then
+            # a candidate that started tried at least one route (the guard may
+            # kill it mid-attack, before its summary line: that is a success)
+            if ! grep -q "ATTACK" "$out/v2.log"; then
                 echo "    ERROR: the candidate never ran its attack, so this run tests nothing:"
                 head -2 "$out/v2.log" | sed 's/^/      /'
             fi

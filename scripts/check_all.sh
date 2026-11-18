@@ -132,6 +132,11 @@ print('yes' if a==b else 'no')" "$OUT/r1/sweep-v3/summary.json" "$OUT/r1/again/s
             SECONDS_MAX=$SECS LAP=$LAP sh scripts/run_demo.sh "$s" "$OUT/r$r" > "$OUT/r$r/$s.console" 2>&1
         fi
         f="$d/summary.json"
+        if grep -q "ERROR" "$OUT/r$r/$s.console"; then
+            bad "$r" "scenario $s: no ERROR lines" "$(grep -m1 ERROR "$OUT/r$r/$s.console" | tr '|' '/')"
+        else
+            ok "$r" "scenario $s: no ERROR lines"
+        fi
         if [ ! -s "$f" ]; then bad "$r" "scenario $s: ran" "no summary.json; see $OUT/r$r/$s.console"; continue; fi
         if [ "$(j "$f" 'd["valid_evidence"]')" = True ]; then
             ok "$r" "scenario $s: evidence valid"

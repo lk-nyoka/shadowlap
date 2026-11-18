@@ -152,6 +152,37 @@ stalls swing from run to run (one flood run had 325) with no v1 misses,
 which is the Windows host pausing the VM, not the scenario. In every attack
 run the guard stopped the candidate at 98% of a CPU after 968–969 ms.
 
+**Repeated runs with the fixed launcher and guard (18 November, evening).**
+27 more full laps (240,678 frames), same setup, candidate running in every
+scenario except baseline (none) and flood (starved on purpose):
+
+| Scenario | Runs | v1 misses (total) | Host stalls min / median / max | v1 p99 median | v1 worst median / max | Guard containment |
+|---|---|---|---|---|---|---|
+| shadow | 5 | 6 | 49 / 269 / 1191 | 455 µs | 5.64 / 7.65 ms | |
+| CPU flood on the shadow side | 5 | 1 | 53 / 562 / 1932 | 314 µs | 2.06 / 7.09 ms | |
+| hostile candidate (11 routes, child process, CPU burn) | 5 | 0 | 67 / 128 / 510 | 356 µs | 1.77 / 7.16 ms | 962–996 ms, 2 processes each time |
+| baseline (no candidate) | 3 | 0 | 93 / 101 / 153 | 496 µs | 2.88 / 2.92 ms | |
+| candidate crashes | 3 | 2 | 14 / 168 / 1615 | 502 µs | 2.26 / 6.23 ms | |
+| candidate freezes 2 s | 3 | 0 | 55 / 343 / 2045 | 549 µs | 5.03 / 8.25 ms | |
+| candidate stopped from outside | 3 | 1 | 437 / 438 / 1362 | 486 µs | 2.53 / 2.81 ms | |
+
+**v1 missed 10 of 240,678 deadlines (0.004%).** We checked every one against
+the car model's own timing, frame by frame:
+
+- 5 happened while the **whole VM was frozen** (the car model itself woke
+  170–690 ms late in the same frames): the Windows host, not QNX scheduling.
+- 4 happened during **short pauses of 2–8 ms** that also delayed the car
+  model; we cannot prove where those came from, so we count them as misses.
+- 1 was the **first frame of a run** (start-up).
+
+The whole machine was noisier this evening than on 17 November (it was also
+recording the demo video): v1's p99 doubled **in the baseline runs too**,
+which have no candidate and no guard. All runs together, with a candidate
+running: **10 misses in 374,388 frames over 42 laps** (17 Nov: 0 in 133,710).
+On a missed frame the car model falls back to discs only (no motor braking,
+capped at 95% of rear grip) for that 10 ms frame. Real timing claims need real hardware; this is QEMU nested in
+WSL2 on a laptop.
+
 **Single runs of all seven scenarios** (16 November):
 
 Measured 16 November on the current code. Real Monza lap (7,933 frames, one
