@@ -81,6 +81,7 @@ check - "safety monitor matches its pinned hash" "$PY" -c "import sys; sys.path.
 check - "LICENSE present (MIT)" grep -q "MIT License" LICENSE
 check - "README states QNX version, target, toolchain" sh -c 'grep -q "QNX SDP 8.0" README.md && grep -qi "QEMU" README.md && grep -q "qcc" README.md'
 check - "lap file present ($LAP)" test -s "$LAP"
+check - "codelab builds (codelab/cpuwatch.c, spin.c)" sh -c 'cc -O2 -Wall -Wextra -Werror -o out/check/cpuwatch codelab/cpuwatch.c && cc -O2 -Wall -Wextra -Werror -o out/check/spin codelab/spin.c'
 [ -n "$LAPNOTE" ] && warn - "real Monza lap" "$LAPNOTE"
 
 # tamper tests: a changed monitor, or missing evidence, must never pass
@@ -166,6 +167,10 @@ print('yes' if a==b else 'no')" "$OUT/r1/sweep-v3/summary.json" "$OUT/r1/again/s
                     || bad "$r" "attack: guard stopped the CPU burn" ;;
         esac
     done
+    if [ "$r" = 1 ] && [ -s "$OUT/r1/shadow/compare.csv" ]; then
+        check 1 "replay page builds from the shadow run (tools/make_replay.py)" sh -c \
+            "$PY tools/make_replay.py $OUT/r1/shadow --lap $LAP --target local --recorded check --out $OUT/replay/index.html && grep -q DecompressionStream $OUT/replay/index.html"
+    fi
     if "$PY" -c "import numpy, matplotlib" 2>/dev/null; then
         check "$r" "report builds (tools/report.py)" sh -c "$PY tools/report.py $OUT/r$r && test -s $OUT/r$r/report.html"
     else

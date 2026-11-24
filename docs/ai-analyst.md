@@ -14,6 +14,26 @@ It is built so the AI cannot make things up unnoticed:
    of the review as unverified.
 4. **It never touches the car.** It runs after the lap, on the log.
 
+## Option 0: what we actually ran (free, local, no Ollama)
+
+On 23 November we ran the analyst with **Qwen2.5-3B-Instruct** (Apache-2.0, GGUF
+Q4_K_M from Hugging Face) served by `llama-cpp-python`, which speaks the same
+OpenAI-style API. About 6 GB of RAM, CPU only:
+
+```bash
+pip install "llama-cpp-python[server]"
+curl -L -o qwen2.5-3b-instruct-q4_k_m.gguf \
+  https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf
+python3 -m llama_cpp.server --model qwen2.5-3b-instruct-q4_k_m.gguf --n_ctx 4096 --n_batch 128 --port 8099 \
+  --model_alias qwen2.5-3b-instruct &
+python3 tools/analyst.py out/shadow --provider openai --url http://127.0.0.1:8099/v1 \
+  --model qwen2.5-3b-instruct --timeout 1500
+```
+
+The checker only verifies **numbers and episode ids**; the model's reasoning can still
+be wrong, which is why the review is advice to an engineer and never touches the
+verdict or the car.
+
 ## Option A: free and local (Ollama in Ubuntu)
 
 ```bash

@@ -19,15 +19,19 @@ Automotive & Mobility
 
 ## Video
 
-<<YouTube link: public or unlisted, under 3 minutes>>
+https://youtu.be/zPbI2RrV_hg
 
 ## Try it out
 
 - https://github.com/lk-nyoka/shadowlap
+- https://lk-nyoka.github.io/shadowlap/replay/ (the real dashboard replaying a run recorded on QNX, no install)
+- https://github.com/lk-nyoka/shadowlap/blob/main/codelab/README.md (codelab)
 
 ## Built with
 
-`c` · `qnx` · `qnx-sdp-8.0` · `qemu` · `posix` · `resource-manager` · `python` · `javascript` · `github-actions` · `openf1`
+`c` · `qnx` · `qnx-sdp-8.0` · `qemu` · `posix` · `resource-manager` · `python` · `javascript` · `github-actions` · `openf1` · `claude` · `kokoro-tts`
+
+**AI tools used to build it:** Claude (Anthropic) helped write and review code, tests and docs, and edited the demo video; every claim was checked against runs. The narration voice is Kokoro-82M (Apache-2.0), run locally.
 
 ---
 
@@ -118,9 +122,9 @@ All attack routes, as recorded on QNX:
 
 ### The AI part
 
-<<Run it once on a real lap before submitting (docs/ai-analyst.md, free with Ollama), then paste one finding from its review here. If you don't run it, move this section to "What's next".>>
+**We ran it on the recorded QNX run from the video** (v2, hot day, worn tyres), on 23 November, with a free local model (Qwen2.5-3B-Instruct, on a CPU). Its verdict: *"v2 is not ready to control the car."* It found the battery overcharge starting at 8.7 s and the rear-lock risk at 8.8–9.1 s, and proposed making v2 start tapering its charging at 80% battery. That is exactly the flaw we planted (v2 waits until 90%; v1 tapers from 80%). **0 unverified numbers.** Some of its suggested next tests were weak, which is why the review is advice and never the verdict. Full, unedited review: [`docs/ai-analyst-example.md`](https://github.com/lk-nyoka/shadowlap/blob/main/docs/ai-analyst-example.md).
 
-`tools/analyst.py` writes an engineering review of a run: a verdict, the problems it found, fixes to make, and the next tests to run. It uses a free local model (Ollama) or a free Gemini key.
+`tools/analyst.py` writes an engineering review of a run: a verdict, the problems it found, fixes to make, and the next tests to run. It runs with any free local model (llama.cpp as we did, or Ollama) or a free Gemini key.
 
 It is built so the AI cannot make things up unnoticed:
 
@@ -218,15 +222,20 @@ V2_USER=qnxuser PROD_CPU=0 SHADOW_CPU=1 sh run_demo.sh all out
 
 ## Codelab / tutorial (bonus)
 
-<<link, if written>>
+https://github.com/lk-nyoka/shadowlap/blob/main/codelab/README.md
+
+**A CPU budget for untrusted code on QNX 8.0, without adaptive partitioning.** About 45 minutes. It builds `cpuwatch`, a privileged watchdog that reads every process of one user through runtime clocks (`clock_getcpuclockid`) and `DCMD_PROC_INFO`, enforces a sliding-window budget from QNX's privileged priority band, and catches a program that hides its work in a child process. It also covers what a watchdog does not guarantee, and the QNX-specific trap we hit (`exec` counts against `RLIMIT_NPROC`).
 
 ---
 
 ## Before you press Submit
 
-- [ ] YouTube video public or unlisted, under 3:00, **shows it running on QNX**, no third-party logos or music
+- [ ] YouTube video **Public** (the rules require publicly visible; unlisted is not enough), under 3:00, **shows it running on QNX**, no third-party logos or music, captions uploaded (`shadow-lap-final.srt`)
 - [ ] Repo public; MIT licence shows in the GitHub About box
 - [ ] GitHub About: description + topics (`qnx`, `automotive`, `brake-by-wire`, `shadow-mode`, `real-time`)
 - [ ] Fresh-clone test passed: `CLONE=1 ROUNDS=1 sh scripts/check_all.sh`
 - [ ] Category: Automotive & Mobility (only one)
 - [ ] Your private email isn't in any public file
+- [ ] Optional bonus: codelab/tutorial URL (separate $3,500 prize; any QNX 8.0 topic)
+- [ ] README video link filled in (`<<YOUTUBE LINK>>` at the top of README.md)
+- [ ] After submitting: save Devpost's confirmation email; if anything fails, email support with the full submission

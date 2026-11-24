@@ -1,15 +1,30 @@
 # Shadow Lap
 
-**Test the next brake controller without putting it in control. A QNX 8.0
-prototype.**
+**Test a brake software update without putting it in control. A QNX 8.0
+prototype.** [▶ 3-minute video](https://youtu.be/zPbI2RrV_hg) ·
+[▶ Replay a recorded QNX run in your browser, no install](https://lk-nyoka.github.io/shadowlap/replay/) ·
+[Codelab: a CPU budget for untrusted code on QNX 8.0](codelab/README.md)
+
+**Measured on QNX SDP 8.0 (in QEMU), all recorded:**
+
+- The update runs beside the trusted software with **no path to the brakes**.
+  We attacked that wall ourselves: every route was blocked or contained in
+  **5 of 5 runs**, including hiding CPU use in a child process (the guard
+  stopped both processes after 962–996 ms).
+- Over **42 laps** with an update running, the trusted v1 answered late
+  **10 times in 374,388 frames** (0.003%); half of those came while the
+  Windows host froze the whole VM. Every one is explained below.
+
+**Modelled at scale:** over 600 laps in changing conditions, the two flawed
+updates fail (600 of 600 laps, 304 of 600) and the fixed one passes (0 of
+600), and it keeps passing across five different random campaigns (3,000
+laps).
 
 Every road-car maker that blends motor braking with disc braking, and every
 racing team, has the same problem: you can't let untested control software
-brake a real car. Shadow Lap runs the candidate controller (v2) beside the
-trusted one (v1). v2 sees every input and makes every decision, but its
-decisions only go into a log. v1 keeps sole control of the actuator. In our
-tests, none of the injected candidate failures (crashing, hanging, being
-stopped, flooding its CPU, attacking the brakes) made v1 miss a deadline.
+brake a real car. Shadow Lap runs the update, the *candidate* (v2), beside
+today's trusted software (v1). v2 sees every input and makes every decision,
+but its decisions only go into a log. v1 keeps sole control of the actuator.
 
 The output is evidence: every moment the candidate broke a limit or
 disagreed, why, how serious it was, and a verdict that fails closed.
@@ -400,7 +415,7 @@ sudo -E env "PATH=$PATH" sh scripts/check_all.sh   # also runs the attack scenar
 On WSL or a cloud VM an occasional v1 deadline miss is reported as a warning:
 those hosts pause now and then. Timing is judged on QNX (`scripts/repeat.sh`).
 
-**AI review:** `python3 tools/analyst.py out/shadow` writes an engineering
+**AI review** ([a real review of the recorded QNX run](docs/ai-analyst-example.md)): `python3 tools/analyst.py out/shadow` writes an engineering
 verdict on v2 from the run's evidence, with every number checked against the
 data. Free options (local Ollama or a free Gemini key): [docs/ai-analyst.md](docs/ai-analyst.md).
 
