@@ -148,28 +148,43 @@ Then the sneaky case, where the parent sits idle and a child does the burning:
 on -u qnxuser /tmp/spin 10 --child
 ```
 
-Expected output, both times (from a Linux run of the same code; your numbers will
-differ):
+Real output on **QNX 8.0 in QEMU** (24 November 2026). The three commands were
+pasted together, so the watchdog and the first `spin` started at the same moment.
+The QNX console mixed the lines together; here they are in the order they printed:
 
 ```
-cpuwatch: user tester: budget 40% of one CPU over 1000 ms, checked every 50 ms
-spin: pid 612, burning a CPU for 10 s
-cpuwatch: OVER BUDGET: 1 process(es) of tester used 43% of a CPU -> stopped (SIGKILL) after running hot for 482 ms
-spin: pid 615, burning a CPU for 10 s in a child process
-spin: child 616 spins, parent 615 stays idle
-cpuwatch: OVER BUDGET: 2 process(es) of tester used 42% of a CPU -> stopped (SIGKILL) after running hot for 428 ms
+# /tmp/cpuwatch --user qnxuser --budget 40 &
+cpuwatch: user qnxuser: budget 40% of one CPU over 1000 ms, checked every 50 ms
+# on -u qnxuser /tmp/spin 10
+spin: pid 487442, burning a CPU for 10 s
+Killed
+cpuwatch: OVER BUDGET: 1 process(es) of qnxuser used 98% of a CPU -> stopped (SIGKILL) after running hot for 975 ms
+# on -u qnxuser /tmp/spin 10 --child
+spin: pid 499730, burning a CPU for 10 s in a child process
+spin: child 507924 spins, parent 499730 stays idle
+Killed
+cpuwatch: OVER BUDGET: 2 process(es) of qnxuser used 45% of a CPU -> stopped (SIGKILL) after running hot for 467 ms
 ```
 
-The second line is the point of step 2: **2 processes**. A watchdog that only
-watched the parent's process ID would have seen an idle parent and done nothing
-while the child burned a whole CPU. (We tried it: 4 seconds, nothing caught.)
+Both 10-second programs were stopped in under a second. The last line is the point
+of step 2: **2 processes**. A watchdog that only watched the parent's process ID
+would have seen an idle parent and done nothing while the child burned a whole CPU.
+(We tried it: 4 seconds, nothing caught.)
 
-Why "about half a second"? The budget is an *average over the last second*. A
-program spinning at 100% pushes that average over 40% once it has burned about
-0.4 s inside the window, plus up to one 50 ms check. In Shadow Lap, where the
-watch starts together with the program, the same guard stopped a hostile
-program after **962–996 ms in 5 of 5 runs on QNX 8.0 in QEMU**, because a fresh
-window has to fill first.
+Why 975 ms the first time and 467 ms the second? The budget is an *average over the
+last second*, and `cpuwatch` only acts on a full window, so a short burst is allowed.
+
+- **First run:** the watchdog and `spin` started together, so the window had to
+  fill first. By then `spin` had used 98% of that second. That is the same as in
+  Shadow Lap, where the guard starts with the program and stopped a hostile
+  program after **962–996 ms in 5 of 5 runs** on QNX 8.0.
+- **Second run:** the window had already partly filled with idle time before the
+  child started. A program spinning at 100% pushes the average over 40% once it
+  has burned about 0.4 s inside the window, plus up to one 50 ms check. Here that
+  took 467 ms.
+
+On Linux the same code caught one process after 482 ms and two after 428 ms, with
+the window already full.
 
 ## Step 6: know what this is, and isn't
 

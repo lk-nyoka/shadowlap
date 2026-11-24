@@ -1,7 +1,7 @@
 # Devpost submission: Shadow Lap
 
 Everything below is ready to paste into the Devpost form, field by field.
-Fill in the two `<<…>>` placeholders (YouTube link, codelab link) before submitting.
+The video and codelab links are filled in.
 
 ---
 
@@ -237,5 +237,5 @@ https://github.com/lk-nyoka/shadowlap/blob/main/codelab/README.md
 - [ ] Category: Automotive & Mobility (only one)
 - [ ] Your private email isn't in any public file
 - [ ] Optional bonus: codelab/tutorial URL (separate $3,500 prize; any QNX 8.0 topic)
-- [ ] README video link filled in (`<<YOUTUBE LINK>>` at the top of README.md)
+- [x] README video link filled in
 - [ ] After submitting: save Devpost's confirmation email; if anything fails, email support with the full submission
