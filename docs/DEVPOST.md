@@ -80,6 +80,8 @@ The conditions varied across the 600 laps: battery 50–92%, air 10–45 °C, ty
 
 Shadow Lap is a set of QNX 8.0 processes. The isolation that keeps the candidate away from the brakes is enforced by QNX, and we tested it route by route with a hostile candidate.
 
+**Where to see QNX, quickly:** the video at **0:48** (the hot-day lap running on QNX; the dashboard says "Running on QNX") and **1:59** (the attack, recorded on QNX); the [replay of that QNX run](https://lk-nyoka.github.io/shadowlap/replay/) in your browser; the QNX results in the README ("Results on QNX 8.0"); and the files and functions in the table below.
+
 | What | Where in the repo | QNX feature |
 |---|---|---|
 | Brake actuator as a QNX resource manager, `/dev/bbw/actuator`, mode 0620, owned by the trusted side: the candidate, running as its own unprivileged user, gets "Permission denied" | `src/actuator.c` (`resmgr_attach`, `io_write`, `iofunc_write_verify`, `dispatch_block`) | Resource managers, POSIX permissions on the path namespace |

@@ -512,7 +512,7 @@ table.chk td{padding:7px 6px;border-bottom:1px solid var(--line);font-variant-nu
   <div class="card"><div class="tiles3">
    <div class="tile"><span>Frames checked</span><b id="s_frames">0</b></div>
    <div class="tile"><span>Candidate answers missing</span><b id="s_gap" class="ok">0</b></div>
-   <div class="tile"><span>Host stalls (car sim late)</span><b id="s_ovr" class="ok">0</b></div>
+   <div class="tile" title="Frames where the simulated car itself woke more than 2 ms late for its 10 ms tick, because the computer or VM paused it. v1 is timed from when each frame was actually sent, so these are not v1 misses."><span>Car sim woke late (&gt;2 ms, host)</span><b id="s_ovr" class="ok">0</b></div>
    <div class="tile"><span>Running on</span><b id="s_on" style="font-size:15px">-</b></div>
   </div></div>
  </div>

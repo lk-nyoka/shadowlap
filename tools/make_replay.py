@@ -65,6 +65,7 @@ window.EventSource=function(){ES=this; this.h={};
   setTimeout(()=>emit('status',state()),0);
   setTimeout(()=>{try{const s=(id,v)=>{const e=document.getElementById(id); if(e){e.value=v; e.disabled=true}};
     s('lap',REC.lap); s('target',REC.target); s('scen',REC.scenario); s('cand',REC.candidate); s('cond',REC.cond);
+    const vs=document.getElementById('vstat'); if(vs) vs.textContent='Optional: sync your own onboard video to the lap. The project demo video is linked at the top of the page.';
     play();}catch(e){}},800);};
 })();
 </script>
